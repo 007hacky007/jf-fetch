@@ -1,0 +1,10 @@
+/vendor/
+/storage/app.sqlite
+/storage/logs/*.log
+/storage/nginx.pid
+/.idea/
+/.vscode/
+/.phpunit.cache
+/library/*
+/downloads/*
+.DS_Store

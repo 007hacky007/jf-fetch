@@ -1,0 +1,168 @@
+/* Custom styles layered on top of Tailwind utilities. */
+:root {
+  color-scheme: dark;
+  font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --toast-info: rgba(59, 130, 246, 0.9);
+  --toast-success: rgba(16, 185, 129, 0.9);
+  --toast-warning: rgba(234, 179, 8, 0.9);
+  --toast-error: rgba(248, 113, 113, 0.9);
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+}
+
+.tab-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9999px;
+  padding: 0.5rem 1rem;
+  font-weight: 600;
+  font-size: 0.875rem;
+  color: rgba(226, 232, 240, 0.7);
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid transparent;
+  transition: all 0.18s ease;
+}
+
+.tab-button:hover,
+.tab-button:focus-visible {
+  color: #e2e8f0;
+  border-color: rgba(99, 102, 241, 0.35);
+  outline: none;
+}
+
+.tab-button.is-active {
+  background: linear-gradient(135deg, rgba(79, 70, 229, 0.5), rgba(59, 130, 246, 0.45));
+  border-color: rgba(99, 102, 241, 0.6);
+  color: #fff;
+  box-shadow: 0 12px 24px -16px rgba(59, 130, 246, 0.8);
+}
+
+.panel {
+  width: 100%;
+  min-height: 420px;
+}
+
+.modal {
+  width: min(520px, 92vw);
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 1.25rem;
+  padding: 0;
+  background: rgba(15, 23, 42, 0.95);
+  color: #e2e8f0;
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.6);
+  backdrop-filter: blur(12px);
+}
+
+.modal::backdrop {
+  background: rgba(15, 23, 42, 0.7);
+  backdrop-filter: blur(4px);
+}
+
+.modal header {
+  padding: 1.5rem;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.15);
+}
+
+.modal form,
+.modal .modal-body {
+  padding: 1.5rem;
+}
+
+.modal footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  padding: 1.25rem 1.5rem;
+  border-top: 1px solid rgba(148, 163, 184, 0.15);
+  background: rgba(9, 14, 23, 0.8);
+}
+
+.toast {
+  pointer-events: auto;
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  border-radius: 1rem;
+  padding: 0.75rem 1rem;
+  color: #fff;
+  font-size: 0.875rem;
+  line-height: 1.4;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 18px 30px rgba(15, 23, 42, 0.3);
+  animation: toast-in 0.35s ease forwards;
+}
+
+.toast[data-variant="info"] {
+  background: var(--toast-info);
+}
+
+.toast[data-variant="success"] {
+  background: var(--toast-success);
+}
+
+.toast[data-variant="warning"] {
+  background: var(--toast-warning);
+}
+
+.toast[data-variant="error"] {
+  background: var(--toast-error);
+}
+
+.toast button {
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  padding: 0.25rem;
+  font-size: 0.85rem;
+}
+
+.toast.fade-out {
+  animation: toast-out 0.25s ease forwards;
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes toast-out {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.96);
+  }
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  border: 0;
+}
+
+.form-grid {
+  display: grid;
+  gap: 1rem;
+}
+
+.form-grid.two-cols {
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+}

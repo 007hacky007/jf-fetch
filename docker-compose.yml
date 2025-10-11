@@ -1,0 +1,21 @@
+services:
+  app:
+    build:
+      context: .
+      args:
+        PUID: ${PUID-1000}
+        PGID: ${PGID-1000}
+    image: jf-fetch:latest
+    container_name: jf-fetch
+    restart: unless-stopped
+    environment:
+      ARIA2_SECRET: ${ARIA2_SECRET:-CHANGEME}
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./downloads:/downloads
+      - ./library:/library
+      - ./config:/var/www/config:ro
+      - ./storage:/var/www/storage
+    # Uncomment the following line if building on Apple Silicon and a dependency lacks arm64 builds.
+    # platform: linux/amd64
