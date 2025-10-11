@@ -273,6 +273,7 @@ function renderJobActions(job, canControl) {
 	}
 
 	if (status === 'completed' && job.final_path) {
+		buttons.push(`<button type="button" data-job-action="download" data-job-id="${jobId}" class="job-btn" title="Download file" aria-label="Download file">⬇️</button>`);
 		buttons.push(`<button type="button" data-job-action="delete-file" data-job-id="${jobId}" class="job-btn job-btn-danger">Delete File</button>`);
 	}
 
@@ -297,6 +298,10 @@ async function handleJobAction(jobId, action) {
 			endpoint = API.jobResume;
 			successMessage = 'Job resumed.';
 			break;
+		case 'download':
+			// Directly trigger browser download; no fetch/JSON handling.
+			window.open(`${API.jobDownload}?id=${jobId}`, '_blank');
+			return; // No toast; server handles file response.
 		case 'delete-file':
 			endpoint = API.jobDelete;
 			method = 'DELETE';

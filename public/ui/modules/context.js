@@ -115,6 +115,7 @@ export const API = {
 	jobPriority: '/api/jobs/priority',
 	jobReorder: '/api/jobs/reorder',
 	jobDelete: '/api/jobs/delete',
+	jobDownload: '/api/jobs/download',
 	jobStream: '/api/jobs/stream',
 	systemStorage: '/api/system/storage',
 	systemHealth: '/api/system/health',
