@@ -395,6 +395,7 @@ export function startJobStream() {
 		const stream = new EventSource(API.jobStream);
 		stream.addEventListener('open', () => {
 			console.info('SSE connected');
+			state.jobStreamConnectedAt = Date.now();
 		});
 
 		const attachHandler = (eventName) => {
@@ -443,6 +444,11 @@ function handleJobEvent(event) {
 	const job = event.job ?? {};
 	const notificationKey = `${event.type}:${job.id ?? ''}`;
 	if (['job.completed', 'job.failed', 'job.removed', 'job.deleted'].includes(event.type) && !state.jobNotifications.has(notificationKey)) {
+		// Only show toast for recent events (avoid backlog spam on login)
+		if (!isRecentJobEvent(event, job)) {
+			// Skip toast; still record notification key to avoid future duplication
+			state.jobNotifications.add(notificationKey);
+		} else {
 		state.jobNotifications.add(notificationKey);
 		if (state.jobNotifications.size > 200) {
 			const oldest = state.jobNotifications.values().next().value;
@@ -465,6 +471,7 @@ function handleJobEvent(event) {
 			case 'job.deleted':
 				showToast(`${title} file deleted.`, 'info');
 				break;
+		}
 		}
 	}
 	state.activity.unshift({
@@ -641,3 +648,40 @@ function jobStructureChanged(previous, current) {
 }
 
 export { sortJobsInPlace };
+
+// Determine if a job event is recent enough to warrant a toast.
+// Strategy:
+// 1. If the job object has updated_at or completed/failed timestamp fields, compare with now.
+// 2. Otherwise fallback to comparing current time with stream connection time; suppress events received within the first backlog window.
+// We treat events as recent if they are within the last 10 seconds relative to now OR they arrived after the stream was opened.
+function isRecentJobEvent(event, job) {
+	const now = Date.now();
+	const STREAM_GRACE_MS = 2000; // ignore backlog toasts during first 2s unless timestamp proves recency
+	const RECENT_THRESHOLD_MS = 10000; // 10s window for explicit timestamps
+
+	// Prefer explicit timestamps from job payload
+	const tsFields = ['updated_at', 'completed_at', 'failed_at', 'deleted_at', 'created_at'];
+	for (const field of tsFields) {
+		const raw = job && job[field];
+		if (!raw) continue;
+		const date = parseIsoDate(raw);
+		const t = date?.getTime();
+		if (Number.isFinite(t)) {
+			if (now - t <= RECENT_THRESHOLD_MS) return true; // clearly recent
+			return false; // has timestamp but stale
+		}
+	}
+
+	// No usable timestamp: fall back to connection timing heuristics
+	if (typeof state.jobStreamConnectedAt === 'number' && state.jobStreamConnectedAt > 0) {
+		// Suppress events that arrive immediately after connect (likely backlog) within grace period
+		if (now - state.jobStreamConnectedAt < STREAM_GRACE_MS) {
+			return false;
+		}
+		// After grace window, allow toasts
+		return true;
+	}
+
+	// If we cannot determine, be conservative and suppress
+	return false;
+}

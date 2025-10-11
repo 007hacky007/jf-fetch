@@ -26,6 +26,7 @@ export const state = {
 	settingsLoading: false,
 	settingsSaving: false,
 	settingsError: null,
+	jobStreamConnectedAt: null, // timestamp (ms) when current SSE connection opened
 };
 
 export const els = {
