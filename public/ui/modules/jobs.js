@@ -447,6 +447,12 @@ function handleJobEvent(event) {
 	if (!event || !event.type) return;
 
 	const job = event.job ?? {};
+	// Capture previous job status (if any) before merge for change detection
+	let previousStatus = null;
+	if (job.id != null) {
+		const existing = state.jobs.find((j) => Number(j.id) === Number(job.id));
+		if (existing) previousStatus = existing.status;
+	}
 	const notificationKey = `${event.type}:${job.id ?? ''}`;
 	if (['job.completed', 'job.failed', 'job.removed', 'job.deleted'].includes(event.type) && !state.jobNotifications.has(notificationKey)) {
 		// Only show toast for recent events (avoid backlog spam on login)
@@ -479,16 +485,6 @@ function handleJobEvent(event) {
 		}
 		}
 	}
-	state.activity.unshift({
-		type: event.type,
-		job_id: event.job?.id ?? null,
-		title: event.job?.title ?? 'Unknown',
-		status: event.job?.status,
-		at: new Date().toISOString(),
-	});
-	state.activity = state.activity.slice(0, 25);
-	renderActivity();
-
 	let requiresRefresh = false;
 
 	if (event.type === 'job.removed') {
@@ -509,6 +505,30 @@ function handleJobEvent(event) {
 		}
 	} else {
 		requiresRefresh = true;
+	}
+
+	// After state updated (if merged), decide whether to log activity
+	let currentStatus = job.status;
+	if (!requiresRefresh && job.id != null) {
+		const existingAfter = state.jobs.find((j) => Number(j.id) === Number(job.id));
+		if (existingAfter) currentStatus = existingAfter.status;
+	}
+
+	const isStatusChange = previousStatus !== null && currentStatus !== previousStatus;
+	const isNewJob = previousStatus === null && !!job.id;
+	const isTerminalEvent = ['job.completed', 'job.failed', 'job.removed', 'job.deleted'].includes(event.type);
+	const isNonUpdate = event.type !== 'job.updated';
+
+	if (isNonUpdate || isStatusChange || isNewJob || isTerminalEvent) {
+		state.activity.unshift({
+			type: event.type,
+			job_id: event.job?.id ?? null,
+			title: event.job?.title ?? 'Unknown',
+			status: currentStatus,
+			at: new Date().toISOString(),
+		});
+		state.activity = state.activity.slice(0, 25);
+		renderActivity();
 	}
 
 	if (requiresRefresh) {
