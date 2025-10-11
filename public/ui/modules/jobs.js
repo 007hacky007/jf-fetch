@@ -123,6 +123,8 @@ function getJobDisplayState(job) {
 	const progressPercent = Number.isFinite(progressValue) ? Math.max(0, Math.min(100, progressValue)) : 0;
 	const progressWidth = `${progressPercent.toFixed(2)}%`;
 	const progressColorClass = progressBarColor(status);
+	// Create a textual (wget-like) progress bar representation
+	const progressText = generateTextProgressBar(progressPercent, 30);
 	const errorNote = !isDeleted && job.error_text ? String(job.error_text) : '';
 	const deletionNote = isDeleted ? String(job.error_text ?? 'Downloaded file removed.') : '';
 	const priorityDisabled = ['completed', 'failed', 'canceled', 'deleted'].includes(status);
@@ -139,12 +141,28 @@ function getJobDisplayState(job) {
 		statusMeta,
 		progressWidth,
 		progressColorClass,
+		progressText,
 		errorNote,
 		deletionNote,
 		ownerLabel,
 		priorityDisabled,
 		draggable,
 	};
+}
+
+// Generate a wget-like textual progress bar. Example: 25% [======>                              ]
+// width specifies the number of character cells inside the brackets.
+function generateTextProgressBar(percent, width = 30) {
+	const p = Math.max(0, Math.min(100, Number(percent) || 0));
+	const cells = Math.max(10, Math.min(120, Math.floor(width)));
+	const filled = Math.floor((p / 100) * cells);
+	const showArrow = p < 100 && filled < cells; // Show an arrow for in-progress state
+	const barFilled = '='.repeat(Math.max(0, filled - (showArrow ? 1 : 0)));
+	const barArrow = showArrow ? '>' : (p >= 100 ? '=' : '');
+	const barEmpty = ' '.repeat(Math.max(0, cells - filled));
+	const bar = `${barFilled}${barArrow}${barEmpty}`;
+	const pct = `${Math.round(p)}%`.padStart(4, ' ');
+	return `${pct} [${bar}]`;
 }
 
 function renderJobItem(job) {
@@ -179,9 +197,7 @@ function renderJobItem(job) {
 						<span data-job-progress-label>${escapeHtml(display.progressLabel)}</span>
 						<span data-job-status-meta>${escapeHtml(display.statusMeta)}</span>
 					</div>
-					<div class="h-2 w-full overflow-hidden rounded-full bg-slate-800/60">
-						<div class="h-full ${display.progressColorClass} transition-all duration-500 ease-out" data-job-progress-bar style="width: ${display.progressWidth};"></div>
-					</div>
+					<pre data-job-progress-text class="font-mono text-[11px] leading-tight text-slate-300 whitespace-pre overflow-hidden">${escapeHtml(display.progressText)}</pre>
 					${deletionNote || errorNote}
 				</div>
 				<div class="flex flex-col items-end gap-3">
@@ -229,10 +245,10 @@ function updateJobDom(job) {
 		statusMeta.textContent = display.statusMeta;
 	}
 
-	const progressBar = item.querySelector('[data-job-progress-bar]');
-	if (progressBar instanceof HTMLElement) {
-		progressBar.style.width = display.progressWidth;
-		progressBar.className = `h-full ${display.progressColorClass} transition-all duration-500 ease-out`;
+	// Legacy graphical bar removed; update textual bar instead
+	const progressTextEl = item.querySelector('[data-job-progress-text]');
+	if (progressTextEl instanceof HTMLElement) {
+		progressTextEl.textContent = display.progressText;
 	}
 
 	return true;
