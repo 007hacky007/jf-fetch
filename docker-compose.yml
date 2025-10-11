@@ -11,7 +11,7 @@ services:
     environment:
       ARIA2_SECRET: ${ARIA2_SECRET:-CHANGEME}
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     volumes:
       - ./downloads:/downloads
       - ./library:/library
