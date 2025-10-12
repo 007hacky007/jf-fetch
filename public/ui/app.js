@@ -223,6 +223,62 @@ function wireSettings() {
 
 		await saveSettings();
 	});
+
+	// Jellyfin libraries interactions
+	const fetchBtn = document.getElementById('jellyfin-libraries-refresh');
+	const hideBtn = document.getElementById('jellyfin-libraries-hide');
+	const wrapper = document.getElementById('jellyfin-libraries-wrapper');
+	const loadingEl = document.getElementById('jellyfin-libraries-loading');
+	const errorEl = document.getElementById('jellyfin-libraries-error');
+	const selectEl = document.getElementById('jellyfin-libraries-select');
+	const libraryIdInput = els.settingsJellyfinLibraryId;
+
+	fetchBtn?.addEventListener('click', async () => {
+		if (!state.isAdmin) return;
+		if (!wrapper) return;
+		wrapper.classList.remove('hidden');
+		if (errorEl) {
+			errorEl.classList.add('hidden');
+			errorEl.textContent = '';
+		}
+		if (loadingEl) loadingEl.classList.remove('hidden');
+		if (selectEl) selectEl.innerHTML = '';
+		try {
+			const response = await fetchJson(API.jellyfinLibraries);
+			const libs = Array.isArray(response?.data) ? response.data : [];
+			if (selectEl) {
+				selectEl.innerHTML = libs
+					.map((lib) => {
+						const id = String(lib.id ?? '');
+						const name = String(lib.name ?? id);
+						const type = lib.collection_type ? ` (${lib.collection_type})` : '';
+						const selected = libraryIdInput && libraryIdInput.value === id ? 'selected' : '';
+						return `<option value="${id}" ${selected}>${escapeHtml(name + type)} – ${escapeHtml(id)}</option>`;
+					})
+					.join('');
+			}
+		} catch (error) {
+			if (errorEl) {
+				errorEl.textContent = messageFromError(error);
+				errorEl.classList.remove('hidden');
+			}
+		} finally {
+			if (loadingEl) loadingEl.classList.add('hidden');
+		}
+	});
+
+	selectEl?.addEventListener('change', () => {
+		if (!(selectEl instanceof HTMLSelectElement) || !libraryIdInput) return;
+		const option = selectEl.selectedOptions[0];
+		if (option) {
+			libraryIdInput.value = option.value;
+			showToast('Library ID selected.', 'success');
+		}
+	});
+
+	hideBtn?.addEventListener('click', () => {
+		wrapper?.classList.add('hidden');
+	});
 }
 
 async function loadSettings(force = false) {
@@ -276,6 +332,7 @@ async function saveSettings() {
 		jellyfin: {
 			url: (els.settingsJellyfinUrl?.value ?? '').trim(),
 			api_key: (els.settingsJellyfinApiKey?.value ?? '').trim(),
+			library_id: (els.settingsJellyfinLibraryId?.value ?? '').trim(),
 		},
 	};
 
@@ -334,6 +391,7 @@ function renderSettings() {
 		els.settingsLibraryPath,
 		els.settingsJellyfinUrl,
 		els.settingsJellyfinApiKey,
+		els.settingsJellyfinLibraryId,
 	].filter((input) => input instanceof HTMLInputElement);
 
 	inputs.forEach((input) => {
@@ -369,6 +427,9 @@ function renderSettings() {
 		}
 		if (els.settingsJellyfinApiKey) {
 			els.settingsJellyfinApiKey.value = settings?.jellyfin?.api_key ?? '';
+		}
+		if (els.settingsJellyfinLibraryId) {
+			els.settingsJellyfinLibraryId.value = settings?.jellyfin?.library_id ?? '';
 		}
 	}
 }

@@ -87,6 +87,7 @@ function buildSettingsResponse(): array
 		'jellyfin' => [
 			'url' => (string) Config::get('jellyfin.url'),
 			'api_key' => (string) Config::get('jellyfin.api_key'),
+			'library_id' => (string) Config::get('jellyfin.library_id'),
 		],
 	];
 }
@@ -106,6 +107,7 @@ function validateSettingsPayload(array $payload): array
 		'paths.library' => ['section' => 'paths', 'field' => 'library', 'type' => 'string', 'required' => true],
 		'jellyfin.url' => ['section' => 'jellyfin', 'field' => 'url', 'type' => 'string', 'required' => false],
 		'jellyfin.api_key' => ['section' => 'jellyfin', 'field' => 'api_key', 'type' => 'string', 'required' => false],
+		'jellyfin.library_id' => ['section' => 'jellyfin', 'field' => 'library_id', 'type' => 'string', 'required' => false],
 	];
 
 	$normalized = [];
@@ -181,6 +183,11 @@ function validateSettingsPayload(array $payload): array
 				break;
 
 			case 'jellyfin.api_key':
+				$value = trim((string) $rawValue);
+				$normalized[$key] = $value;
+				break;
+
+			case 'jellyfin.library_id':
 				$value = trim((string) $rawValue);
 				$normalized[$key] = $value;
 				break;

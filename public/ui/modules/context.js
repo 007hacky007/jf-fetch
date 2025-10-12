@@ -81,6 +81,8 @@ export const els = {
 	settingsLibraryPath: document.getElementById('settings-library-path'),
 	settingsJellyfinUrl: document.getElementById('settings-jellyfin-url'),
 	settingsJellyfinApiKey: document.getElementById('settings-jellyfin-api-key'),
+	settingsJellyfinLibraryId: document.getElementById('settings-jellyfin-library-id'),
+	jellyfinLibrariesSelect: document.getElementById('jellyfin-libraries-select'),
 	usersTable: document.getElementById('users-table'),
 	usersEmpty: document.getElementById('users-empty'),
 	usersError: document.getElementById('users-error'),
@@ -128,6 +130,7 @@ export const API = {
 	users: '/api/users',
 	audit: '/api/audit',
 	settings: '/api/settings',
+	jellyfinLibraries: '/api/system/jellyfin_libraries',
 };
 
 export const providerCatalog = {

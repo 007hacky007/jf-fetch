@@ -104,6 +104,19 @@ Consult `docs/COPILOT_SPEC.md` for the roadmap.
 
 `config/app.ini` contains all runtime settings. The `[aria2]` section defines the JSON-RPC endpoint and secret used by `App\Download\Aria2Client`, while `[webshare]` stores the `wst` token consumed by `App\Providers\WebshareProvider`. Other sections configure Jellyfin, storage paths, and database connectivity. Avoid hard-coding configuration elsewhere—update the INI files instead.
 
+### Jellyfin integration
+
+Provide your Jellyfin **Server URL** and **API key** in the Settings tab to enable automatic library refreshes after a download completes or a previously completed file is deleted. For faster, scoped scans you can optionally set a **Library ID** (Virtual Folder ID). Use the "Fetch libraries" button to query `/Library/VirtualFolders` and select from the available libraries; the selected ID is stored in `jellyfin.library_id`.
+
+Refresh behavior:
+
+1. If `jellyfin.url`, `jellyfin.api_key`, and `jellyfin.library_id` are set, the app sends a targeted POST to:
+	`/Items/<LIBRARY_ID>/Refresh?Recursive=true&ImageRefreshMode=Default&MetadataRefreshMode=Default&ReplaceAllImages=false&RegenerateTrickplay=false&ReplaceAllMetadata=false` with `X-Emby-Token: <API_KEY>`.
+2. If only URL + API key are set, it falls back to a global `/Library/Refresh` request.
+3. If configuration is incomplete, the refresh is skipped (logged for diagnostics).
+
+Selecting a library ID avoids a full-library scan (especially helpful on large multi‑TB libraries) and keeps Jellyfin responsive.
+
 ### Adding the Webshare provider
 
 1. Sign in with an administrator account and open the **Providers** tab.

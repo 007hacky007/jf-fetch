@@ -65,6 +65,10 @@ final class Jellyfin
     {
         $url = rtrim((string) Config::get('jellyfin.url'), '/');
         $apiKey = (string) Config::get('jellyfin.api_key');
+        $libraryId = '';
+        if (Config::has('jellyfin.library_id')) {
+            $libraryId = (string) Config::get('jellyfin.library_id');
+        }
 
         if ($url === '' || $apiKey === '') {
             error_log('[jellyfin] Skipping refresh due to missing configuration.');
@@ -72,7 +76,19 @@ final class Jellyfin
             return;
         }
 
-        $endpoint = $url . '/Library/Refresh?api_key=' . urlencode($apiKey);
+        // Prefer targeted library refresh when library ID provided, else global refresh fallback
+        if ($libraryId !== '') {
+            $endpoint = sprintf(
+                '%s/Items/%s/Refresh?Recursive=true&ImageRefreshMode=Default&MetadataRefreshMode=Default&ReplaceAllImages=false&RegenerateTrickplay=false&ReplaceAllMetadata=false',
+                $url,
+                rawurlencode($libraryId)
+            );
+            $headers = [ 'X-Emby-Token: ' . $apiKey ];
+        } else {
+            // Legacy global refresh; using old style query param
+            $endpoint = $url . '/Library/Refresh?api_key=' . urlencode($apiKey);
+            $headers = [];
+        }
 
         $handle = curl_init($endpoint);
         if ($handle === false) {
@@ -85,6 +101,7 @@ final class Jellyfin
             CURLOPT_POST => true,
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_TIMEOUT => 10,
+            CURLOPT_HTTPHEADER => $headers,
         ]);
 
         try {
