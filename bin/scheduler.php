@@ -182,6 +182,10 @@ function processJob(array $job, Aria2Client $aria2): void
 			'dir' => $downloadDir,
 		];
 
+		// Attempt to derive a human friendly target filename so aria2 stores the file under a Jellyfin friendly name.
+		$firstUri = $uris[0];
+		$options['out'] = deriveOutputFilename((string) ($job['title'] ?? 'download'), $firstUri);
+
 		$gid = $aria2->addUri($uris, $options);
 
 		Db::run(
@@ -204,6 +208,45 @@ function processJob(array $job, Aria2Client $aria2): void
 	} catch (Throwable $exception) {
 		failJob((int) $job['id'], 'Failed to enqueue job: ' . $exception->getMessage(), $job);
 	}
+}
+
+/**
+ * Sanitize a prospective filename by removing or replacing characters that commonly
+ * cause issues across filesystems and media servers. Keeps letters, numbers, spaces,
+ * dots, dashes, underscores, parentheses, apostrophes.
+ */
+function sanitizeFilename(string $name): string
+{
+	// Normalize unicode whitespace to space
+	$name = preg_replace('/\s+/u', ' ', $name) ?? $name;
+	// Remove BBCode remnants or stray brackets leftover
+	$name = preg_replace('/\[[^\]]+\]/', '', $name) ?? $name;
+	// Strip any path separators
+	$name = str_replace(['/', '\\'], ' ', $name);
+	// Allow safe chars only
+	$name = preg_replace("/[^A-Za-z0-9 ._()'\-,]/u", '', $name) ?? $name;
+	// Collapse multiple spaces
+	$name = trim(preg_replace('/ {2,}/', ' ', $name) ?? $name);
+	return $name;
+}
+
+/**
+ * Derive final output filename with extension from URI.
+ */
+function deriveOutputFilename(string $title, string $uri): string
+{
+	$sanitized = sanitizeFilename($title);
+	if ($sanitized === '') {
+		$sanitized = 'download';
+	}
+	$extension = '.mkv';
+	$pathPart = parse_url($uri, PHP_URL_PATH) ?? '';
+	if (is_string($pathPart) && preg_match('~\.(mkv|mp4|avi|mov|webm|mpg|mpeg)$~i', $pathPart, $m)) {
+		$extension = '.' . strtolower($m[1]);
+	} elseif (preg_match('~\.(mkv|mp4|avi|mov|webm|mpg|mpeg)(?:\?|$)~i', $uri, $m)) {
+		$extension = '.' . strtolower($m[1]);
+	}
+	return $sanitized . $extension;
 }
 
 /**

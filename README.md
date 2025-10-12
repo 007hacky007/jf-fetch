@@ -159,6 +159,21 @@ Troubleshooting:
 - "Kra.sk subscription inactive" means the account lacks a current subscription; renew it then re‑try.
 - Enable debug logging and tail `storage/logs` for deeper diagnostics.
 
+### Friendly Filenames for Kra.sk Downloads
+
+When a Kra.sk (or any provider) job is enqueued the scheduler now attempts to preserve a human‑readable filename instead of the opaque server side hash (e.g. `u5TJ7hIQxq...`). The logic:
+
+1. Use the queued job `title` as the base name (this already comes from the search result's cleaned title in the UI).
+2. Infer the container extension from the first resolved download URI path if it ends with a known video extension (`.mkv`, `.mp4`, `.avi`, `.mov`, `.webm`, `.mpg`, `.mpeg`). If none is detected it defaults to `.mkv`.
+3. Sanitize the base (retain letters, numbers, spaces, commas, dots, dashes, underscores, parentheses, apostrophes) and collapse duplicate whitespace.
+4. Pass the final value to aria2 via the `out` option so the file is written directly under that name in the downloads directory.
+
+This improves Jellyfin library identification accuracy and avoids unnecessary post‑download renaming. Example:
+
+`Animatrix - CZ, EN, EN+tit, HU, HU+tit (2004)` → `Animatrix - CZ, EN, EN+tit, HU, HU+tit (2004).mkv`
+
+If you prefer the original server filename, remove or comment out the call to `deriveOutputFilename()` inside `bin/scheduler.php`.
+
 ## Container Images
 
 The provided `Dockerfile` installs nginx, php-fpm, aria2, and supervisor on top of `php:8.3-fpm-bookworm`. It copies the repository into `/var/www`, runs Composer in production mode, and seeds `downloads`, `library`, and `storage/logs` with correct ownership. `supervisord` orchestrates nginx, php-fpm, aria2c, and the PHP worker processes. Adjust build arguments `PUID`/`PGID` if host permissions require different ownership.
