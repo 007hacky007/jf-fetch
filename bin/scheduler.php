@@ -229,6 +229,7 @@ function buildProvider(array $providerRow): VideoProvider
 
 	return match ($key) {
 		'webshare' => new WebshareProvider($config),
+		'kraska' => new App\Providers\KraSkProvider($config),
 		default => throw new RuntimeException('Unsupported provider: ' . $key),
 	};
 }

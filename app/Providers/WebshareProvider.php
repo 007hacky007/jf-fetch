@@ -14,7 +14,7 @@ use RuntimeException;
  * Communicates with the Webshare API using the WST token stored in configuration.
  * Normalizes search results to a consistent schema expected by the rest of the app.
  */
-final class WebshareProvider implements VideoProvider
+final class WebshareProvider implements VideoProvider, StatusCapableProvider
 {
     private const API_BASE = 'https://webshare.cz/api/';
 
@@ -482,6 +482,50 @@ final class WebshareProvider implements VideoProvider
             'codec' => $audio['format'] ?? null,
             'channels' => isset($audio['channels']) ? (int) $audio['channels'] : null,
             'language' => $audio['language'] ?? null,
+        ];
+    }
+
+    /**
+     * Status endpoint for symmetry with Kra.sk provider.
+     * Webshare API (public reference) does not provide direct subscription days in the
+     * existing calls we use; we expose token presence and ability to perform a lightweight search.
+     *
+     * @return array<string,mixed>
+     */
+    public function status(): array
+    {
+        $token = null;
+        try {
+            $token = $this->resolveToken();
+        } catch (RuntimeException) {
+            // ignore
+        }
+        $hasToken = is_string($token) && $token !== '';
+        $vipDays = null;
+        $subscriptionActive = null;
+        if ($hasToken) {
+            try {
+                // /api/user_data/ requires POST with wst token.
+                $data = $this->post('user_data/', []);
+                // Response may wrap data differently; normalize.
+                if (isset($data['vip_days'])) {
+                    $vipDays = is_numeric($data['vip_days']) ? (int) $data['vip_days'] : null;
+                } elseif (isset($data['data']['vip_days'])) {
+                    $vipDays = is_numeric($data['data']['vip_days']) ? (int) $data['data']['vip_days'] : null;
+                }
+                if ($vipDays !== null) {
+                    $subscriptionActive = $vipDays > 0;
+                }
+            } catch (RuntimeException) {
+                // Leave vipDays null if the call fails; status still returns token presence.
+            }
+        }
+        return [
+            'provider' => 'webshare',
+            'authenticated' => $hasToken,
+            'token_present' => $hasToken,
+            'vip_days' => $vipDays,
+            'subscription_active' => $subscriptionActive,
         ];
     }
 }

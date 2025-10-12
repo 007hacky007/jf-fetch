@@ -428,6 +428,9 @@ function refreshAllData() {
 	Promise.all(tasks).finally(() => {
 		startStorageAutoRefresh();
 		startJobStream();
+		if (state.isAdmin) {
+			loadProviderStatuses();
+		}
 	});
 }
 
@@ -601,6 +604,8 @@ function renderProviders() {
 	if (state.providers.length === 0) {
 		toggleElement(els.providersEmpty, true);
 		els.providersList.innerHTML = '';
+		// Hide status wrapper when no providers
+		if (els.providersStatusWrapper) toggleElement(els.providersStatusWrapper, false);
 		return;
 	}
 
@@ -609,6 +614,57 @@ function renderProviders() {
 		.map((provider) => renderProviderCard(provider))
 		.join('');
 }
+
+// Provider status aggregation (24h cached)
+async function loadProviderStatuses(force = false) {
+	if (!state.isAdmin) return;
+	if (!els.providersStatusWrapper) return;
+	toggleElement(els.providersStatusWrapper, true);
+	toggleElement(els.providersStatusLoading, true);
+	toggleElement(els.providersStatusError, false);
+	els.providersStatusList.innerHTML = '';
+	try {
+		const url = force ? `${API.providersStatusAll}?refresh=1` : API.providersStatusAll;
+		const response = await fetchJson(url);
+		const items = Array.isArray(response?.data) ? response.data : [];
+		renderProviderStatuses(items, response?.fetched_at, response?.cached === true);
+	} catch (error) {
+		if (els.providersStatusError) {
+			els.providersStatusError.textContent = messageFromError(error);
+			toggleElement(els.providersStatusError, true);
+		}
+	} finally {
+		toggleElement(els.providersStatusLoading, false);
+	}
+}
+
+function renderProviderStatuses(items, fetchedAt, cached) {
+	if (!els.providersStatusList) return;
+	if (!Array.isArray(items)) items = [];
+	els.providersStatusList.innerHTML = items.map(renderProviderStatusItem).join('');
+	if (els.providersStatusMeta) {
+		const when = fetchedAt ? formatRelativeTime(fetchedAt) : 'n/a';
+		els.providersStatusMeta.textContent = `Fetched ${when}${cached ? ' (cache)' : ''}`;
+	}
+}
+
+function renderProviderStatusItem(status) {
+	const provider = escapeHtml(status.provider || 'unknown');
+	const ok = status.authenticated === true;
+	const badge = ok
+		? '<span class="rounded-full bg-emerald-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-300">OK</span>'
+		: '<span class="rounded-full bg-rose-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-rose-300">ERR</span>';
+	const detailsParts = [];
+	if (typeof status.days_left === 'number') detailsParts.push(`${status.days_left} days left`);
+	if (typeof status.vip_days === 'number') detailsParts.push(`${status.vip_days} VIP days`);
+	if (status.subscription_active === true) detailsParts.push('active');
+	if (status.error) detailsParts.push(escapeHtml(String(status.error)));
+	const details = detailsParts.length > 0 ? detailsParts.join(' · ') : '—';
+	return `<li class="flex items-center justify-between rounded-lg border border-slate-800/60 bg-slate-900/50 px-3 py-2"><div class="flex items-center gap-2"><span class="text-xs font-semibold text-slate-200">${provider}</span>${badge}</div><div class="text-[11px] text-slate-400">${details}</div></li>`;
+}
+
+// Wire refresh button
+document.getElementById('providers-status-refresh')?.addEventListener('click', () => loadProviderStatuses(true));
 
 function renderProviderCard(provider) {
 	const configEntries = Object.entries(provider.config ?? {})
@@ -1213,13 +1269,9 @@ async function openProviderModal(provider) {
 	const isEdit = Boolean(provider);
 	const availableTemplates = Object.keys(providerCatalog);
 	const initialTemplate = (() => {
-		if (provider && providerCatalog[provider.key]) {
-			return provider.key;
-		}
-		if (availableTemplates.length > 0) {
-			return availableTemplates[0];
-		}
-		return '__custom';
+		if (provider && providerCatalog[provider.key]) return provider.key;
+		if (availableTemplates.length > 0) return availableTemplates[0];
+		return '';
 	})();
 	const initialKey = provider?.key ?? providerCatalog[initialTemplate]?.key ?? '';
 	const title = isEdit ? `Edit ${provider?.name ?? provider?.key ?? 'provider'}` : 'Add provider';
@@ -1234,9 +1286,8 @@ async function openProviderModal(provider) {
 				${availableTemplates
 					.map((key) => `<option value="${key}" ${key === initialTemplate ? 'selected' : ''}>${escapeHtml(providerCatalog[key].label)}</option>`)
 					.join('')}
-				<option value="__custom">Other (advanced)</option>
 			</select>
-			<p class="text-xs text-slate-400">Choose a provider integration. "Other" lets you enter raw JSON.</p>
+			<p class="text-xs text-slate-400">Choose a provider integration.</p>
 		</label>`;
 
 	els.modal.innerHTML = `
@@ -1257,10 +1308,16 @@ async function openProviderModal(provider) {
 						<input name="name" value="${escapeHtml(provider?.name ?? providerCatalog[initialTemplate]?.defaultName ?? providerCatalog[initialTemplate]?.label ?? '')}" placeholder="${escapeHtml(providerCatalog[initialTemplate]?.defaultName ?? '')}" class="rounded-lg border border-slate-700 bg-slate-950/60 px-3 py-2 text-slate-100" required />
 					</label>
 				</div>
-				<label class="inline-flex items-center gap-2 text-sm text-slate-300">
-					<input type="checkbox" name="enabled" ${provider?.enabled !== false ? 'checked' : ''} class="rounded border-slate-700 bg-slate-950 text-brand-500 focus:ring-brand-500/60" />
-					Provider enabled
-				</label>
+				<div class="space-y-2">
+					<label class="inline-flex items-center gap-2 text-sm text-slate-300">
+						<input type="checkbox" name="enabled" ${provider?.enabled !== false ? 'checked' : ''} class="rounded border-slate-700 bg-slate-950 text-brand-500 focus:ring-brand-500/60" />
+						Provider enabled
+					</label>
+					<label class="inline-flex items-center gap-2 text-sm text-slate-300">
+						<input type="checkbox" name="debug" ${provider?.config?.debug === true ? 'checked' : ''} class="rounded border-slate-700 bg-slate-950 text-brand-500 focus:ring-brand-500/60" />
+						<span>Debug mode <span class="text-xs text-slate-500">(logs detailed provider operations to storage/logs/kraska_debug.log)</span></span>
+					</label>
+				</div>
 				<div data-provider-config class="space-y-3"></div>
 			</div>
 			<footer>
@@ -1279,13 +1336,11 @@ async function openProviderModal(provider) {
 
 	const tempConfig = {};
 	let activeTemplate = isEdit
-		? (providerCatalog[initialKey] ? initialKey : '__custom')
+		? (providerCatalog[initialKey] ? initialKey : initialTemplate)
 		: (templateSelect ? templateSelect.value : initialTemplate);
 
 	if (provider?.config && providerCatalog[provider.key]) {
 		tempConfig[provider.key] = { ...provider.config };
-	} else if (provider?.config && !providerCatalog[provider.key]) {
-		tempConfig.__customRaw = JSON.stringify(provider.config, null, 2);
 	}
 
 	const captureCurrentConfig = () => {
@@ -1316,18 +1371,7 @@ async function openProviderModal(provider) {
 	const renderConfigFields = () => {
 		if (!fieldsContainer) return;
 		const definition = providerCatalog[activeTemplate];
-		if (!definition) {
-			const existing = tempConfig.__customRaw
-				?? (provider && !providerCatalog[provider.key] ? JSON.stringify(provider.config ?? {}, null, 2) : '{}');
-			fieldsContainer.innerHTML = `
-				<label class="flex flex-col gap-1 text-sm">
-					<span class="font-medium text-slate-200">Configuration (JSON)</span>
-					<textarea name="config.__raw" rows="6" class="rounded-lg border border-slate-700 bg-slate-950/60 px-3 py-2 text-slate-100">${escapeHtml(existing)}</textarea>
-				</label>
-				<p class="text-xs text-slate-400">Provide a JSON object that will be encrypted and stored for this provider.</p>
-			`;
-			return;
-		}
+		if (!definition) return;
 
 		const values = tempConfig[activeTemplate]
 			?? (provider?.key === activeTemplate ? provider?.config ?? {} : {});
@@ -1388,26 +1432,18 @@ async function openProviderModal(provider) {
 	renderConfigFields();
 
 	if (templateSelect) {
-		templateSelect.addEventListener('change', () => {
+			templateSelect.addEventListener('change', () => {
 			captureCurrentConfig();
 			activeTemplate = templateSelect.value;
-			if (activeTemplate === '__custom') {
-				if (keyInput && !isEdit) {
-					keyInput.readOnly = false;
-					keyInput.classList.remove('cursor-not-allowed');
-					keyInput.value = '';
+			lockKeyInput(activeTemplate);
+			const def = providerCatalog[activeTemplate];
+			if (def && nameInput && !isEdit) {
+				const current = nameInput.value.trim();
+				const suggested = def?.defaultName ?? def?.label;
+				if (!current || current === providerCatalog[initialTemplate]?.defaultName) {
+					nameInput.value = suggested ?? current;
 				}
-			} else {
-				lockKeyInput(activeTemplate);
-				const def = providerCatalog[activeTemplate];
-				if (nameInput && !isEdit) {
-					const current = nameInput.value.trim();
-					const suggested = def?.defaultName ?? def?.label;
-					if (!current || current === providerCatalog[initialTemplate]?.defaultName) {
-						nameInput.value = suggested ?? current;
-					}
-					nameInput.placeholder = suggested ?? '';
-				}
+				nameInput.placeholder = suggested ?? '';
 			}
 			renderConfigFields();
 		});
@@ -1447,14 +1483,6 @@ async function openProviderModal(provider) {
 				const rawValue = String(values[field.name] ?? '');
 				configPayload[field.name] = field.type === 'password' ? rawValue : rawValue.trim();
 			});
-		} else {
-			const rawText = tempConfig.__customRaw ?? String(formData.get('config.__raw') || '{}');
-			try {
-				configPayload = rawText.trim() ? JSON.parse(rawText) : {};
-			} catch (error) {
-				showToast('Configuration must be valid JSON.', 'error');
-				return;
-			}
 		}
 
 		let providerKey = String(formData.get('key') || '').trim();
@@ -1464,6 +1492,11 @@ async function openProviderModal(provider) {
 		if (providerKey === '') {
 			showToast('Provider key is required.', 'error');
 			return;
+		}
+
+		// Add debug flag to config if checked
+		if (formData.get('debug') !== null) {
+			configPayload.debug = true;
 		}
 
 		const payload = {

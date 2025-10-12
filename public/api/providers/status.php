@@ -2,18 +2,18 @@
 
 declare(strict_types=1);
 
-use App\Infra\Audit;
 use App\Infra\Auth;
 use App\Infra\Db;
 use App\Infra\Http;
 use App\Infra\ProviderSecrets;
 use App\Providers\VideoProvider;
+use App\Providers\StatusCapableProvider;
 use App\Providers\WebshareProvider;
 use App\Providers\KraSkProvider;
 
 header('Content-Type: application/json');
 
-if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
     Http::error(405, 'Method not allowed');
     exit;
 }
@@ -25,8 +25,6 @@ try {
     Http::error(403, $exception->getMessage());
     exit;
 }
-
-$actor = Auth::user();
 
 $id = isset($_GET['id']) ? (int) $_GET['id'] : 0;
 if ($id <= 0) {
@@ -40,32 +38,27 @@ if ($providerRow === false) {
     exit;
 }
 
-$provider = buildProvider($providerRow);
+try {
+    $provider = buildProvider($providerRow);
+} catch (Throwable $e) {
+    Http::error(400, $e->getMessage());
+    exit;
+}
 
-$query = isset($_GET['q']) ? (string) $_GET['q'] : 'test';
+if (!$provider instanceof StatusCapableProvider) {
+    Http::error(400, 'Status not implemented for this provider.');
+    exit;
+}
 
 try {
-    $provider->search($query, 1);
-    $actorId = is_array($actor) && isset($actor['id']) ? (int) $actor['id'] : 0;
-    if ($actorId > 0) {
-        Audit::record($actorId, 'provider.tested', 'provider', $id, ['query' => $query]);
-    }
-
-    Http::json(200, ['status' => 'ok']);
-} catch (Throwable $exception) {
-    $actorId = is_array($actor) && isset($actor['id']) ? (int) $actor['id'] : 0;
-    if ($actorId > 0) {
-        Audit::record($actorId, 'provider.test_failed', 'provider', $id, [
-            'query' => $query,
-            'error' => $exception->getMessage(),
-        ]);
-    }
-
-    Http::error(500, 'Provider test failed.', ['detail' => $exception->getMessage()]);
+    $status = $provider->status();
+    Http::json(200, ['data' => $status]);
+} catch (Throwable $e) {
+    Http::error(500, 'Failed to retrieve status', ['detail' => $e->getMessage()]);
 }
 
 /**
- * Builds provider implementations for testing.
+ * Builds provider implementation.
  */
 function buildProvider(array $providerRow): VideoProvider
 {

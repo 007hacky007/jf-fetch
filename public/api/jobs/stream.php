@@ -92,8 +92,11 @@ while (ob_get_level() > 0) {
 
 // Send padding to force nginx to start sending data immediately
 // Some servers buffer until a certain amount of data is sent
-$write(str_repeat(":\n", 10)); // Send 10 comment lines as padding
-$flush();
+$disablePadding = !empty($overrides['disablePadding']);
+if (!$disablePadding) {
+    $write(str_repeat(":\n", 10)); // Send 10 comment lines as padding
+    $flush();
+}
 
 $lastEventId = $_SERVER['HTTP_LAST_EVENT_ID'] ?? ($_GET['since'] ?? '');
 $since = '1970-01-01T00:00:00.000000+00:00';
@@ -155,8 +158,10 @@ while (!$connectionChecker()) {
             $eventJobId = (int) $row['id'];
             $eventId = $eventTimestamp . '|' . $eventJobId;
             
-            // Debug logging - always log for troubleshooting
-            error_log(sprintf('[SSE] Sending event for job %d, status=%s, progress=%d, updated_at=%s', $eventJobId, $row['status'], $row['progress'], $eventTimestamp));
+            // Debug logging - always log for troubleshooting (guard missing keys)
+            $rawStatus = $row['status'] ?? 'unknown';
+            $rawProgress = isset($row['progress']) && is_numeric($row['progress']) ? (int) $row['progress'] : 0;
+            error_log(sprintf('[SSE] Sending event for job %d, status=%s, progress=%d, updated_at=%s', $eventJobId, $rawStatus, $rawProgress, $eventTimestamp));
             
             $since = $eventTimestamp;
             $afterId = $eventJobId;

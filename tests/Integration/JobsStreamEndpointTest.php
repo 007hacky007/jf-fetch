@@ -78,6 +78,7 @@ final class JobsStreamEndpointTest extends TestCase
             'authClass' => JobsStreamAuthStub::class,
             'rowLimit' => 25,
             'maxLoops' => 2,
+            'disablePadding' => true,
             'timeProvider' => static function () use (&$timeSequence): float {
                 $value = array_shift($timeSequence);
                 if ($value === null) {
@@ -116,7 +117,7 @@ final class JobsStreamEndpointTest extends TestCase
             . ": heartbeat 1016\n\n";
 
         $this->assertSame($expectedOutput, $result['output']);
-    $this->assertSame(4, $result['flushCount']);
+    $this->assertSame(3, $result['flushCount']);
     $this->assertSame([250000], $result['sleepCalls']);
         $this->assertSame([
             ['1970-01-01T00:00:00.000000+00:00', true, 99, 25, null],
@@ -132,6 +133,7 @@ final class JobsStreamEndpointTest extends TestCase
         $result = $this->executeStream([
             'authClass' => JobsStreamAuthStub::class,
             'maxLoops' => 1,
+            'disablePadding' => true,
             'timeProvider' => static function (): float {
                 return 2000.0;
             },
@@ -147,7 +149,7 @@ final class JobsStreamEndpointTest extends TestCase
             . 'data: {"message":"Failed to fetch job updates."}' . "\n\n";
 
         $this->assertSame($expectedOutput, $result['output']);
-    $this->assertSame(3, $result['flushCount']);
+    $this->assertSame(2, $result['flushCount']);
         $this->assertSame([250000], $result['sleepCalls']);
     }
 

@@ -134,6 +134,18 @@
                 </div>
                 <div id="providers-empty" class="hidden rounded-xl border border-dashed border-slate-700/60 p-8 text-center text-sm text-slate-400">No providers configured yet.</div>
                 <div id="providers-error" class="hidden rounded-xl border border-rose-500/40 bg-rose-500/10 p-4 text-sm text-rose-200"></div>
+                <div id="providers-status-wrapper" class="mb-6 hidden">
+                  <div class="rounded-xl border border-slate-800/70 bg-slate-950/40 p-4">
+                    <div class="mb-3 flex items-center justify-between">
+                      <h4 class="text-sm font-semibold uppercase tracking-wide text-slate-300">Status (24h cache)</h4>
+                      <button id="providers-status-refresh" type="button" class="rounded-md border border-slate-700/60 bg-slate-900/60 px-2 py-1 text-xs font-medium text-slate-300 hover:border-brand-400/60 hover:text-brand-200">Force refresh</button>
+                    </div>
+                    <div id="providers-status-loading" class="hidden text-xs text-brand-300">Loading provider statuses…</div>
+                    <div id="providers-status-error" class="hidden rounded-lg border border-rose-500/40 bg-rose-500/10 p-2 text-xs text-rose-200"></div>
+                    <ul id="providers-status-list" class="flex flex-col gap-2 text-xs"></ul>
+                    <div id="providers-status-meta" class="mt-2 text-[10px] uppercase tracking-wide text-slate-500"></div>
+                  </div>
+                </div>
                 <ul id="providers-list" class="flex flex-col gap-4"></ul>
               </div>
             </section>

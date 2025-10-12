@@ -8,6 +8,7 @@ use App\Infra\Http;
 use App\Infra\ProviderSecrets;
 use App\Providers\VideoProvider;
 use App\Providers\WebshareProvider;
+use App\Providers\KraSkProvider;
 
 header('Content-Type: application/json');
 
@@ -84,6 +85,7 @@ function buildProvider(array $row): VideoProvider
 
     return match ((string) $row['key']) {
         'webshare' => new WebshareProvider($config),
+        'kraska' => new KraSkProvider($config),
         default => throw new RuntimeException('Unsupported provider: ' . $row['key']),
     };
 }
