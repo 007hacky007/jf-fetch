@@ -100,6 +100,36 @@ On Apple Silicon, if a dependency lacks arm64 builds you can force an amd64 imag
 
 Consult `docs/COPILOT_SPEC.md` for the roadmap.
 
+## API Endpoints (Selected)
+
+Key endpoints exposed under `public/api/` (not exhaustive):
+
+- `GET /api/jobs/list` – Paged job listing with metadata and pagination meta.
+- `GET /api/jobs/stream` – Server‑sent events stream (incremental updates via since/after_id).
+- `GET /api/jobs/stats` – Aggregated statistics for the job queue. Example response:
+
+```json
+{
+  "data": {
+    "total_jobs": 42,
+    "completed_jobs": 20,
+    "active_jobs": 2,
+    "queued_jobs": 5,
+    "paused_jobs": 1,
+    "canceled_jobs": 3,
+    "failed_jobs": 2,
+    "deleted_jobs": 9,
+    "distinct_users": 4,
+    "total_bytes_downloaded": 9876543210,
+    "total_download_duration_seconds": 123456,
+    "avg_download_duration_seconds": 6172,
+    "success_rate_pct": 48
+  }
+}
+```
+
+`total_bytes_downloaded` and durations are derived by scanning completed job files unless persisted; consider caching for very large libraries.
+
 ## Configuration
 
 `config/app.ini` contains all runtime settings. The `[aria2]` section defines the JSON-RPC endpoint and secret used by `App\Download\Aria2Client`, while `[webshare]` stores the `wst` token consumed by `App\Providers\WebshareProvider`. Other sections configure Jellyfin, storage paths, and database connectivity. Avoid hard-coding configuration elsewhere—update the INI files instead.
@@ -111,7 +141,7 @@ Provide your Jellyfin **Server URL** and **API key** in the Settings tab to enab
 Refresh behavior:
 
 1. If `jellyfin.url`, `jellyfin.api_key`, and `jellyfin.library_id` are set, the app sends a targeted POST to:
-	`/Items/<LIBRARY_ID>/Refresh?Recursive=true&ImageRefreshMode=Default&MetadataRefreshMode=Default&ReplaceAllImages=false&RegenerateTrickplay=false&ReplaceAllMetadata=false` with `X-Emby-Token: <API_KEY>`.
+  `/Items/<LIBRARY_ID>/Refresh?Recursive=true&ImageRefreshMode=Default&MetadataRefreshMode=Default&ReplaceAllImages=false&RegenerateTrickplay=false&ReplaceAllMetadata=false` with `X-Emby-Token: <API_KEY>`.
 2. If only URL + API key are set, it falls back to a global `/Library/Refresh` request.
 3. If configuration is incomplete, the refresh is skipped (logged for diagnostics).
 
@@ -138,13 +168,16 @@ The Kra.sk provider integrates the private API used by the Stream-Cinema Kodi ad
 
 Usage notes:
 
-- Search path: This app mirrors the Kodi addon multi‑stage flow:
-	1. Acquire/refresh a Stream‑Cinema auth token via `POST /auth/token?krt=<kra_session>` (headers include `X-Uuid` — static if you configured one).
-	2. Perform an authenticated GET: `https://stream-cinema.online/kodi/Search/search?search=<q>&id=search`.
-	3. Parse `menu` entries; each may embed basic metadata (`quality`, `lang`, `bitrate`).
-	4. For entries that are navigational paths (e.g. `/Movie/12345`) fetch detail JSON to inspect `strms`.
-	5. Select the first stream with provider `kraska` and extract its `ident`.
-	6. Resolve ident via Kra.sk: `POST /api/file/download` to get the ephemeral direct download URL (`data.link`).
+Search path: This app mirrors the Kodi addon multi‑stage flow:
+
+1. Acquire/refresh a Stream‑Cinema auth token via `POST /auth/token?krt=<kra_session>` (headers include `X-Uuid` — static if you configured one).
+2. Perform an authenticated GET: `https://stream-cinema.online/kodi/Search/search?search=<q>&id=search`.
+3. Parse `menu` entries; each may embed basic metadata (`quality`, `lang`, `bitrate`).
+4. For entries that are navigational paths (e.g. `/Movie/12345`) fetch detail JSON to inspect `strms`.
+5. Select the first stream with provider `kraska` and extract its `ident`.
+6. Resolve ident via Kra.sk: `POST /api/file/download` to get the ephemeral direct download URL (`data.link`).
+
+
 - A session is established lazily via `/api/user/login` (response `session_id`). The session is cached in memory for up to 30 minutes; on expiration or auth failure it is transparently re‑negotiated.
 - Subscription status is verified via `/api/user/info`. If the account lacks an active subscription (no `subscribed_until` field) an error is raised and the action is aborted.
 
@@ -173,6 +206,17 @@ This improves Jellyfin library identification accuracy and avoids unnecessary po
 `Animatrix - CZ, EN, EN+tit, HU, HU+tit (2004)` → `Animatrix - CZ, EN, EN+tit, HU, HU+tit (2004).mkv`
 
 If you prefer the original server filename, remove or comment out the call to `deriveOutputFilename()` inside `bin/scheduler.php`.
+
+## UI Panels
+
+- Search – Provider search and queueing.
+- Queue – Live job statuses (pause/resume/cancel/delete partial or final files) & infinite scrolling.
+- Providers – Credential + status management.
+- Settings – App paths, Jellyfin integration.
+- Users – Admin user management.
+- Audit Log – Historical actions.
+- Storage – Disk free/used space.
+- Queue Stats – Aggregated counts, total downloaded data, and success rate (manual refresh).
 
 ## Container Images
 

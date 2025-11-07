@@ -276,4 +276,85 @@ final class Jobs
 
         return $rows !== false ? $rows : [];
     }
+
+    /**
+     * Aggregates statistics about jobs and downloaded data.
+     * NOTE: File size aggregation reads file sizes from disk for completed jobs.
+     * For large installations consider persisting file_size_bytes in the database.
+     *
+     * @return array<string, scalar|null>
+     */
+    public static function stats(bool $isAdmin, int $userId): array
+    {
+        $conditions = [];
+        $params = [];
+        if (!$isAdmin) {
+            $conditions[] = 'user_id = :user_id';
+            $params['user_id'] = $userId;
+        }
+        $where = $conditions ? ('WHERE ' . implode(' AND ', $conditions)) : '';
+
+        $baseCountsSql = [
+            'total_jobs' => "SELECT COUNT(*) FROM jobs $where",
+            'completed_jobs' => "SELECT COUNT(*) FROM jobs $where" . ($where ? ' AND' : ' WHERE') . " status = 'completed'",
+            'active_jobs' => "SELECT COUNT(*) FROM jobs $where" . ($where ? ' AND' : ' WHERE') . " status IN ('starting','downloading')",
+            'queued_jobs' => "SELECT COUNT(*) FROM jobs $where" . ($where ? ' AND' : ' WHERE') . " status = 'queued'",
+            'paused_jobs' => "SELECT COUNT(*) FROM jobs $where" . ($where ? ' AND' : ' WHERE') . " status = 'paused'",
+            'canceled_jobs' => "SELECT COUNT(*) FROM jobs $where" . ($where ? ' AND' : ' WHERE') . " status = 'canceled'",
+            'failed_jobs' => "SELECT COUNT(*) FROM jobs $where" . ($where ? ' AND' : ' WHERE') . " status = 'failed'",
+            'deleted_jobs' => "SELECT COUNT(*) FROM jobs $where" . ($where ? ' AND' : ' WHERE') . " status = 'deleted'",
+        ];
+
+        $stats = [];
+        foreach ($baseCountsSql as $key => $sql) {
+            $stmt = Db::run($sql, $params);
+            $value = $stmt->fetchColumn();
+            $stats[$key] = $value !== false ? (int) $value : 0;
+        }
+
+        // Distinct users involved in these jobs (respect RBAC)
+        $distinctSql = "SELECT COUNT(DISTINCT user_id) FROM jobs $where";
+        $distinctStmt = Db::run($distinctSql, $params);
+        $distinctUsers = $distinctStmt->fetchColumn();
+        $stats['distinct_users'] = $distinctUsers !== false ? (int) $distinctUsers : 0;
+
+        // Aggregate bytes & duration for completed jobs
+        $completedSql = "SELECT id, final_path, created_at, updated_at FROM jobs $where" . ($where ? ' AND' : ' WHERE') . " status = 'completed'";
+        $completedStmt = Db::run($completedSql, $params);
+        $completedRows = $completedStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        $totalBytes = 0;
+        $totalDurationSeconds = 0;
+        foreach ($completedRows as $row) {
+            $path = is_string($row['final_path'] ?? null) ? (string) $row['final_path'] : null;
+            if ($path && is_file($path)) {
+                $size = @filesize($path);
+                if (is_int($size) && $size > 0) {
+                    $totalBytes += $size;
+                }
+            }
+            try {
+                $createdTs = strtotime((string) $row['created_at']);
+                $updatedTs = strtotime((string) $row['updated_at']);
+                if ($createdTs !== false && $updatedTs !== false && $updatedTs >= $createdTs) {
+                    $totalDurationSeconds += ($updatedTs - $createdTs);
+                }
+            } catch (\Throwable) {
+                // ignore parse errors
+            }
+        }
+        $stats['total_bytes_downloaded'] = $totalBytes;
+        $stats['total_download_duration_seconds'] = $totalDurationSeconds;
+
+        // Average download duration (seconds) for completed jobs
+        $stats['avg_download_duration_seconds'] = $stats['completed_jobs'] > 0
+            ? (int) floor($totalDurationSeconds / $stats['completed_jobs'])
+            : null;
+
+        // Percentage success rate
+        $stats['success_rate_pct'] = $stats['total_jobs'] > 0
+            ? (int) floor(($stats['completed_jobs'] / $stats['total_jobs']) * 100)
+            : null;
+
+        return $stats;
+    }
 }

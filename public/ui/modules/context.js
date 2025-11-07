@@ -127,6 +127,7 @@ export const API = {
 	jobDelete: '/api/jobs/delete',
 	jobDownload: '/api/jobs/download',
 	jobStream: '/api/jobs/stream',
+	jobsStats: '/api/jobs/stats',
 	systemStorage: '/api/system/storage',
 	systemHealth: '/api/system/health',
 	users: '/api/users',

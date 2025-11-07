@@ -476,6 +476,7 @@ function refreshAllData() {
 	const tasks = [
 		loadProviders(),
 		loadJobs(),
+	    loadStats(),
 		loadStorage(),
 	];
 
@@ -490,6 +491,7 @@ function refreshAllData() {
 		if (state.isAdmin) {
 			loadProviderStatuses();
 		}
+        loadStats();
 	});
 }
 
@@ -518,9 +520,71 @@ function resetState() {
 	renderSearchResults();
 	renderJobs();
 	renderStorage();
+	renderStats();
 	renderUsers();
 	renderAudit();
 	renderSettings();
+}
+
+// Stats (jobs aggregate)
+async function loadStats() {
+	if (!state.user) return;
+	const container = document.getElementById('stats-content');
+	const errorEl = document.getElementById('stats-error');
+	const loadingEl = document.getElementById('stats-loading');
+	const metaEl = document.getElementById('stats-meta');
+	if (!container || !errorEl || !loadingEl) return;
+	loadingEl.classList.remove('hidden');
+	errorEl.classList.add('hidden');
+	try {
+		const response = await fetchJson(API.jobsStats);
+		state.stats = response?.data ?? null;
+		renderStats();
+		if (metaEl) metaEl.textContent = 'Updated ' + new Date().toLocaleTimeString();
+	} catch (error) {
+		if (errorEl) {
+			errorEl.textContent = messageFromError(error);
+			errorEl.classList.remove('hidden');
+		}
+	} finally {
+		loadingEl.classList.add('hidden');
+	}
+}
+
+document.getElementById('stats-refresh-btn')?.addEventListener('click', () => loadStats());
+
+function renderStats() {
+	const container = document.getElementById('stats-content');
+	if (!container) return;
+	const stats = state.stats;
+	if (!stats) {
+		container.innerHTML = '<div class="text-sm text-slate-500">No stats yet.</div>';
+		return;
+	}
+	const rows = [];
+	const humanBytes = (bytes) => {
+		if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
+		const units = ['B','KB','MB','GB','TB','PB'];
+		let i = 0;
+		let value = bytes;
+		while (value >= 1024 && i < units.length - 1) { value /= 1024; i++; }
+		return value.toFixed(value >= 10 || i === 0 ? 0 : 1) + ' ' + units[i];
+	};
+	const push = (label, value) => rows.push(`<div class="flex items-center justify-between text-xs"><span class="text-slate-400">${escapeHtml(label)}</span><span class="font-medium text-slate-200">${escapeHtml(String(value))}</span></div>`);
+	push('Total jobs', stats.total_jobs);
+	push('Completed', stats.completed_jobs);
+	push('Active', stats.active_jobs);
+	push('Queued', stats.queued_jobs);
+	push('Paused', stats.paused_jobs);
+	push('Canceled', stats.canceled_jobs);
+	push('Failed', stats.failed_jobs);
+	push('Deleted', stats.deleted_jobs);
+	push('Distinct users', stats.distinct_users);
+	push('Success rate', stats.success_rate_pct !== null ? stats.success_rate_pct + '%' : '—');
+	push('Total downloaded', humanBytes(stats.total_bytes_downloaded));
+	push('Total download time', formatDuration(stats.total_download_duration_seconds));
+	push('Avg download time', stats.avg_download_duration_seconds !== null ? formatDuration(stats.avg_download_duration_seconds) : '—');
+	container.innerHTML = `<div class="grid gap-1">${rows.join('')}</div>`;
 }
 
 function setUser(user) {

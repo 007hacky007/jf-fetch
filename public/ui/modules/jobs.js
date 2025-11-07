@@ -11,6 +11,7 @@ import {
 	formatRelativeTime,
 	progressBarColor,
 	parseIsoDate,
+	formatBytes,
 } from './utils.js';
 
 let dragSourceId = null;
@@ -139,6 +140,10 @@ function getJobDisplayState(job) {
 	const deletedAt = job.deleted_at ? formatRelativeTime(job.deleted_at) : null;
 	const isDeleted = status === 'deleted';
 	const isCompleted = status === 'completed';
+	// If backend marks completed but progress < 100 (race condition), force 100 on UI.
+	if (isCompleted && progress < 100) {
+		job.progress = 100;
+	}
 	const completedFile = typeof job.final_path === 'string' ? job.final_path.split(/[/\\]/).filter(Boolean).pop() : null;
 	const progressLabel = isDeleted ? 'File deleted' : `Progress ${Math.round(progress)}%`;
 	// Additional metadata: creation time, size, duration
