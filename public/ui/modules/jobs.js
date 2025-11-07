@@ -486,14 +486,9 @@ function handleJobEvent(event) {
 	}
 	let requiresRefresh = false;
 
-	if (event.type === 'job.removed') {
-		const removed = removeJobFromState(job.id ?? job.job_id ?? null);
-		if (!removed) {
-			requiresRefresh = true;
-		} else {
-			renderJobs();
-		}
-	} else if (job && Object.keys(job).length > 0) {
+	// Treat 'job.removed' as a status update (canceled) rather than deleting the job from the UI.
+	// This preserves visibility of canceled jobs so they don't disappear until a manual refresh.
+	if (job && Object.keys(job).length > 0) {
 		const merged = mergeJobIntoState(job);
 		if (!merged || !merged.job) {
 			requiresRefresh = true;
@@ -542,23 +537,26 @@ export function normalizeJob(job) {
 }
 
 function compareJobs(a, b) {
+	// Primary sort: most recently created first (newest at top)
 	const createdA = parseIsoDate(a?.created_at ?? 0)?.getTime();
 	const createdB = parseIsoDate(b?.created_at ?? 0)?.getTime();
 	if (Number.isFinite(createdA) && Number.isFinite(createdB) && createdA !== createdB) {
-		return createdB - createdA;
+		return createdB - createdA; // descending by created_at
 	}
 
-	const updatedA = parseIsoDate(a?.updated_at ?? 0)?.getTime();
-	const updatedB = parseIsoDate(b?.updated_at ?? 0)?.getTime();
-	if (Number.isFinite(updatedA) && Number.isFinite(updatedB) && updatedA !== updatedB) {
-		return updatedB - updatedA;
-	}
-
-	const priorityDiff = Number(b?.priority ?? 0) - Number(a?.priority ?? 0);
+	// Fallback: lower priority value still means higher precedence (retain original semantics)
+	const priorityDiff = Number(a?.priority ?? 0) - Number(b?.priority ?? 0);
 	if (priorityDiff !== 0) {
 		return priorityDiff;
 	}
 
+	// Next: explicit queue position if provided
+	const positionDiff = Number(a?.position ?? 0) - Number(b?.position ?? 0);
+	if (positionDiff !== 0) {
+		return positionDiff;
+	}
+
+	// Final tie-breaker: higher id treated as newer
 	return Number(b?.id ?? 0) - Number(a?.id ?? 0);
 }
 
