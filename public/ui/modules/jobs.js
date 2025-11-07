@@ -141,11 +141,28 @@ function getJobDisplayState(job) {
 	const isCompleted = status === 'completed';
 	const completedFile = typeof job.final_path === 'string' ? job.final_path.split(/[/\\]/).filter(Boolean).pop() : null;
 	const progressLabel = isDeleted ? 'File deleted' : `Progress ${Math.round(progress)}%`;
-	const statusMeta = isDeleted
-		? (deletedAt ? `Deleted ${deletedAt}` : 'Deleted by request')
-		: isCompleted
-		? (completedFile ? `Saved as ${completedFile}` : 'Completed')
-		: `${speed}${eta}`;
+	// Additional metadata: creation time, size, duration
+	const createdAt = job.created_at ? formatRelativeTime(job.created_at) : null;
+	const fileSize = typeof job.file_size_bytes === 'number' ? formatBytes(job.file_size_bytes) : null;
+	const duration = typeof job.download_duration_seconds === 'number' ? formatDuration(job.download_duration_seconds) : null;
+
+	let statusMeta = '';
+	if (isDeleted) {
+		statusMeta = deletedAt ? `Deleted ${deletedAt}` : 'Deleted by request';
+	} else if (isCompleted) {
+		const parts = [];
+		parts.push(completedFile ? `Saved as ${completedFile}` : 'Completed');
+		if (fileSize) parts.push(fileSize);
+		if (duration) parts.push(`Took ${duration}`);
+		statusMeta = parts.join(' • ');
+	} else if (status === 'canceled') {
+		statusMeta = 'Canceled';
+	} else {
+		statusMeta = `${speed}${eta}`;
+	}
+	if (createdAt) {
+		statusMeta += ` • Added ${createdAt}`;
+	}
 	const progressValue = isDeleted ? 0 : progress;
 	const progressPercent = Number.isFinite(progressValue) ? Math.max(0, Math.min(100, progressValue)) : 0;
 	const progressWidth = `${progressPercent.toFixed(2)}%`;
@@ -302,6 +319,10 @@ function renderJobActions(job, canControl) {
 	if (status === 'completed' && job.final_path) {
 		buttons.push(`<button type="button" data-job-action="download" data-job-id="${jobId}" class="job-btn" title="Download file" aria-label="Download file">⬇️</button>`);
 		buttons.push(`<button type="button" data-job-action="delete-file" data-job-id="${jobId}" class="job-btn job-btn-danger">Delete File</button>`);
+	}
+
+	if (status === 'canceled' && job.tmp_path) {
+		buttons.push(`<button type="button" data-job-action="delete-file" data-job-id="${jobId}" class="job-btn job-btn-danger">Delete Partial</button>`);
 	}
 
 	return `<div class="flex flex-wrap justify-end gap-2">${buttons.join('')}</div>`;

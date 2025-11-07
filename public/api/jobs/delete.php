@@ -55,18 +55,26 @@ if ($job['status'] === 'deleted') {
     exit;
 }
 
-if ($job['status'] !== 'completed') {
-    Http::error(422, 'Only completed jobs can delete downloaded files.');
+// Allow deletion for completed OR canceled jobs. For canceled jobs we target tmp_path.
+$status = (string) $job['status'];
+if (!in_array($status, ['completed','canceled'], true)) {
+    Http::error(422, 'Only completed or canceled jobs can delete their files.');
     exit;
 }
 
-$finalPath = isset($job['final_path']) ? trim((string) $job['final_path']) : '';
-if ($finalPath === '') {
-    Http::error(422, 'No downloaded file is associated with this job.');
+$targetPath = '';
+if ($status === 'completed') {
+    $targetPath = isset($job['final_path']) ? trim((string) $job['final_path']) : '';
+} elseif ($status === 'canceled') {
+    $targetPath = isset($job['tmp_path']) ? trim((string) $job['tmp_path']) : '';
+}
+
+if ($targetPath === '') {
+    Http::error(422, 'No file path is associated with this job state.');
     exit;
 }
 
-if (is_dir($finalPath)) {
+if (is_dir($targetPath)) {
     Http::error(422, 'The recorded path is a directory and cannot be deleted automatically.');
     exit;
 }
@@ -74,9 +82,9 @@ if (is_dir($finalPath)) {
 $fileRemoved = false;
 $fileMissing = false;
 
-if (file_exists($finalPath)) {
-    if (!@unlink($finalPath)) {
-        Http::error(500, 'Failed to delete the downloaded file.');
+if (file_exists($targetPath)) {
+    if (!@unlink($targetPath)) {
+        Http::error(500, 'Failed to delete the job file.');
         exit;
     }
     $fileRemoved = true;
@@ -102,10 +110,11 @@ try {
     Db::run(
         "UPDATE jobs
          SET status = 'deleted',
-             progress = 0,
+             progress = CASE WHEN status = 'completed' THEN 100 ELSE 0 END,
              speed_bps = NULL,
              eta_seconds = NULL,
-             final_path = NULL,
+             final_path = CASE WHEN status = 'completed' THEN NULL ELSE final_path END,
+             tmp_path = CASE WHEN status = 'canceled' THEN NULL ELSE tmp_path END,
              error_text = :error,
              deleted_at = :deleted_at,
              updated_at = :updated_at
@@ -129,12 +138,14 @@ if ($updated === null) {
 }
 
 Audit::record((int) $user['id'], 'job.file.deleted', 'job', $jobId, [
-    'original_path' => $finalPath,
+    'original_path' => $targetPath,
     'file_removed' => $fileRemoved,
     'file_missing' => $fileMissing,
+    'original_status' => $status,
 ]);
 Events::notify((int) $user['id'], $jobId, 'job.deleted', [
     'title' => $updated['title'] ?? null,
+    'original_status' => $status,
 ]);
 Jellyfin::refreshLibrary();
 

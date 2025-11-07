@@ -128,7 +128,30 @@ final class Jobs
             'error_text' => $row['error_text'] !== null ? (string) $row['error_text'] : null,
             'created_at' => (string) $row['created_at'],
             'updated_at' => (string) $row['updated_at'],
+            // Expose tmp_path so UI can delete partial files for canceled jobs
+            'tmp_path' => isset($row['tmp_path']) && $row['tmp_path'] !== null ? (string) $row['tmp_path'] : null,
         ];
+
+        // File size (bytes) if final file exists
+        if (isset($row['final_path']) && is_string($row['final_path']) && $row['final_path'] !== '' && is_file($row['final_path'])) {
+            $size = @filesize($row['final_path']);
+            if (is_int($size) && $size >= 0) {
+                $payload['file_size_bytes'] = $size;
+            }
+        }
+
+        // Download duration: approximate as updated_at - created_at when completed
+        if (($row['status'] ?? '') === 'completed') {
+            try {
+                $createdTs = strtotime((string) $row['created_at']);
+                $updatedTs = strtotime((string) $row['updated_at']);
+                if ($createdTs !== false && $updatedTs !== false && $updatedTs >= $createdTs) {
+                    $payload['download_duration_seconds'] = $updatedTs - $createdTs;
+                }
+            } catch (\Throwable) {
+                // ignore
+            }
+        }
 
         if ($includeUser) {
             $payload['user'] = [

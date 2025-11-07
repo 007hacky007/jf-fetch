@@ -183,17 +183,36 @@ function updateProgress(array $job, array $status): void
 		$firstPath = (string) $files[0]['path'];
 	}
 
-	Db::run(
-		"UPDATE jobs SET status = 'downloading', progress = :progress, speed_bps = :speed, eta_seconds = :eta, tmp_path = :tmp_path, updated_at = :updated_at WHERE id = :id",
-		[
-			'progress' => $progress,
-			'speed' => $speed > 0 ? $speed : null,
-			'eta' => $eta,
-			'tmp_path' => $firstPath,
-			'updated_at' => Clock::nowString(),
-			'id' => $job['id'],
-		]
-	);
+	$ariaState = (string) ($status['status'] ?? 'unknown');
+	$newStatus = 'downloading';
+	if ($ariaState === 'paused') {
+		$newStatus = 'paused';
+	}
+
+	if ($newStatus === 'paused') {
+		// Preserve paused state: clear speed/eta, keep progress and tmp_path for potential resume display.
+		Db::run(
+			"UPDATE jobs SET status = 'paused', progress = :progress, speed_bps = NULL, eta_seconds = NULL, tmp_path = :tmp_path, updated_at = :updated_at WHERE id = :id",
+			[
+				'progress' => $progress,
+				'tmp_path' => $firstPath,
+				'updated_at' => Clock::nowString(),
+				'id' => $job['id'],
+			]
+		);
+	} else {
+		Db::run(
+			"UPDATE jobs SET status = 'downloading', progress = :progress, speed_bps = :speed, eta_seconds = :eta, tmp_path = :tmp_path, updated_at = :updated_at WHERE id = :id",
+			[
+				'progress' => $progress,
+				'speed' => $speed > 0 ? $speed : null,
+				'eta' => $eta,
+				'tmp_path' => $firstPath,
+				'updated_at' => Clock::nowString(),
+				'id' => $job['id'],
+			]
+		);
+	}
 
 	logInfo(sprintf('Job %d progress: %d%% (speed %d B/s).', $job['id'], $progress, $speed));
 }

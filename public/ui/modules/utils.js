@@ -62,6 +62,15 @@ export async function fetchJson(url, options = {}) {
 	return payload;
 }
 
+export function formatBytes(bytes) {
+	const value = Number(bytes ?? 0);
+	if (!Number.isFinite(value) || value < 0) return '0 B';
+	const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+	const power = Math.min(units.length - 1, Math.floor(Math.log(value) / Math.log(1024)));
+	const result = value / 1024 ** power;
+	return `${result.toFixed(power === 0 ? 0 : 2)} ${units[power]}`;
+}
+
 export function showToast(message, variant = 'info', timeout = 3500) {
 	if (!els.toastContainer) return;
 	const toast = document.createElement('div');
