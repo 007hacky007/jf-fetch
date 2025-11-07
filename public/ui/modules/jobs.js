@@ -47,27 +47,52 @@ export function wireJobs() {
 	});
 
 	setupDragAndDrop();
+	setupInfiniteScroll();
 }
 
 export async function loadJobs() {
 	if (!state.user) return;
-	toggleElement(els.jobsLoading, true);
+	state.jobs = [];
+	state.jobsOffset = 0;
+	state.jobsTotal = null;
+	state.jobsHasMore = true;
+	renderJobs();
+	await loadJobsPage(true);
+}
 
+async function loadJobsPage(initial = false) {
+	if (!state.user || !state.jobsHasMore) return;
+	if (state.jobsLoadingPage) return; // prevent concurrent fetches
+	state.jobsLoadingPage = true;
+	if (initial) toggleElement(els.jobsLoading, true);
+
+	const limit = state.jobsPageSize || 10;
+	const offset = state.jobsOffset || 0;
 	const params = new URLSearchParams();
+	params.set('limit', String(limit));
+	params.set('offset', String(offset));
 	if (state.showMyJobs) params.set('mine', '1');
 
 	try {
 		const response = await fetchJson(`${API.jobsList}?${params.toString()}`);
 		const jobs = Array.isArray(response?.data) ? response.data : [];
-		state.jobs = jobs.map((job) => normalizeJob(job)).filter(Boolean);
-		sortJobsInPlace(state.jobs);
+		const meta = response?.meta || {};
+		const normalized = jobs.map((j) => normalizeJob(j)).filter(Boolean);
+		state.jobs.push(...normalized);
+		sortJobsInPlace(state.jobs); // ensure stable ordering relative to client expectations
+		state.jobsOffset += normalized.length;
+		state.jobsTotal = typeof meta.total === 'number' ? meta.total : state.jobsTotal;
+		state.jobsHasMore = Boolean(meta.has_more ?? (normalized.length === limit));
 		renderJobs();
 	} catch (error) {
-		showToast(`Failed to load jobs: ${messageFromError(error)}`, 'error');
-		state.jobs = [];
-		renderJobs();
+		showToast(`Failed to load jobs: ${messageFromError(error)}`,'error');
+		if (initial) {
+			state.jobs = [];
+			renderJobs();
+		}
 	} finally {
-		toggleElement(els.jobsLoading, false);
+		state.jobsLoadingPage = false;
+		if (initial) toggleElement(els.jobsLoading, false);
 	}
 }
 
@@ -82,7 +107,10 @@ export function renderJobs() {
 	}
 
 	toggleElement(els.jobsEmpty, false);
-	els.jobsSummary.textContent = `${state.jobs.length} job${state.jobs.length === 1 ? '' : 's'} in queue.`;
+	const loaded = state.jobs.length;
+	const total = typeof state.jobsTotal === 'number' ? state.jobsTotal : loaded;
+	const more = state.jobsHasMore ? ' (scroll for more)' : '';
+	els.jobsSummary.textContent = `${loaded}/${total} job${total === 1 ? '' : 's'} loaded${more}`;
 
 	els.jobsList.innerHTML = state.jobs.map((job) => renderJobItem(job)).join('');
 
@@ -396,7 +424,26 @@ function reorderJobsLocal(sourceId, targetId) {
 export function startJobStream() {
 	if (state.jobStream || !state.user) return;
 	try {
-		const stream = new EventSource(API.jobStream);
+		// Provide last known updated_at/id for incremental streaming if we have jobs already
+		let streamUrl = API.jobStream;
+		if (state.jobs.length > 0) {
+			// Determine newest job based on updated_at then id
+			const sorted = [...state.jobs].sort((a, b) => {
+				const ta = parseIsoDate(a.updated_at)?.getTime() ?? 0;
+				const tb = parseIsoDate(b.updated_at)?.getTime() ?? 0;
+				if (ta !== tb) return tb - ta; // newest first
+				return Number(b.id) - Number(a.id);
+			});
+			if (sorted.length > 0) {
+				const newest = sorted[0];
+				const since = encodeURIComponent(newest.updated_at || '');
+				const afterId = newest.id;
+				if (since) {
+					streamUrl = `${API.jobStream}?since=${since}&after_id=${afterId}`;
+				}
+			}
+		}
+		const stream = new EventSource(streamUrl);
 		stream.addEventListener('open', () => {
 			console.info('SSE connected');
 			state.jobStreamConnectedAt = Date.now();
@@ -646,6 +693,26 @@ function jobStructureChanged(previous, current) {
 }
 
 export { sortJobsInPlace };
+
+// =============================
+// Infinite Scroll (server paged)
+// =============================
+state.jobsPageSize = 10;
+
+function setupInfiniteScroll() {
+	if (state._jobsInfiniteScrollBound) return;
+	state._jobsInfiniteScrollBound = true;
+	window.addEventListener('scroll', () => {
+		const scrollNode = document.documentElement;
+		const scrollTop = window.scrollY || scrollNode.scrollTop;
+		const viewport = window.innerHeight || scrollNode.clientHeight;
+		const fullHeight = scrollNode.scrollHeight;
+		const nearBottom = scrollTop + viewport >= fullHeight - 120; // 120px threshold
+		if (nearBottom && state.jobsHasMore && !state.jobsLoadingPage) {
+			loadJobsPage(false);
+		}
+	}, { passive: true });
+}
 
 // Determine if a job event is recent enough to warrant a toast.
 // Strategy:

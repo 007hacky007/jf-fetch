@@ -102,6 +102,11 @@ $lastEventId = $_SERVER['HTTP_LAST_EVENT_ID'] ?? ($_GET['since'] ?? '');
 $since = '1970-01-01T00:00:00.000000+00:00';
 $afterId = null;
 
+// Accept explicit after_id query param for initial window narrowing
+if (isset($_GET['after_id']) && ctype_digit((string) $_GET['after_id'])) {
+    $afterId = (int) $_GET['after_id'];
+}
+
 if (is_string($lastEventId) && $lastEventId !== '') {
     $parts = explode('|', $lastEventId, 2);
     $timestampPart = $parts[0] ?? '';
@@ -113,7 +118,7 @@ if (is_string($lastEventId) && $lastEventId !== '') {
         $since = '1970-01-01T00:00:00.000000+00:00';
     }
 
-    if (is_string($idPart) && ctype_digit($idPart)) {
+    if ($afterId === null && is_string($idPart) && ctype_digit($idPart)) {
         $afterId = (int) $idPart;
     }
 }
@@ -136,7 +141,7 @@ while (!$connectionChecker()) {
     $hadUpdates = false;
 
     try {
-        $rows = $updatedSince($since, $isAdmin, (int) $user['id'], $rowLimit, $afterId);
+    $rows = $updatedSince($since, $isAdmin, (int) $user['id'], $rowLimit, $afterId);
         // Debug logging - always log for troubleshooting
         $debugMsg = sprintf('[SSE] Loop %d: Query since=%s afterId=%s returned %d rows', $loopCount, $since, $afterId ?? 'null', count($rows));
         error_log($debugMsg);

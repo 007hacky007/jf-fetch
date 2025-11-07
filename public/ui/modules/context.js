@@ -26,6 +26,12 @@ export const state = {
 	settingsSaving: false,
 	settingsError: null,
 	jobStreamConnectedAt: null, // timestamp (ms) when current SSE connection opened
+	// Paging metadata for jobs list (server-side infinite scroll)
+	jobsPageSize: 10,
+	jobsOffset: 0,
+	jobsTotal: null,
+	jobsHasMore: true,
+	jobsLoadingPage: false,
 };
 
 export const els = {

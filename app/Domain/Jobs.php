@@ -40,6 +40,47 @@ final class Jobs
     }
 
     /**
+     * Paged listing variant matching UI ordering (newest first by created_at).
+     * Returns associative array with 'rows' and 'total'.
+     *
+     * @return array{rows: array<int, array<string, mixed>>, total: int}
+     */
+    public static function listPaged(bool $isAdmin, int $userId, bool $mineOnly, int $limit, int $offset): array
+    {
+        $limit = max(1, min(100, $limit));
+        $offset = max(0, $offset);
+
+        $where = '';
+        $params = [];
+
+        if (!$isAdmin || $mineOnly) {
+            $where = 'WHERE jobs.user_id = :user_id';
+            $params['user_id'] = $userId;
+        }
+
+        // Total count (without limit) for pagination metadata
+        $countSql = "SELECT COUNT(*) AS cnt FROM jobs " . ($where !== '' ? str_replace('jobs.user_id', 'jobs.user_id', $where) : '');
+        $countStmt = Db::run($countSql, $params);
+        $countRow = $countStmt->fetch(PDO::FETCH_ASSOC);
+        $total = $countRow !== false ? (int) ($countRow['cnt'] ?? 0) : 0;
+
+        // UI expects newest first (created_at DESC) then priority/position for consistent queue ordering
+        $sql = "SELECT jobs.*,\n                    providers.key AS provider_key,\n                    providers.name AS provider_name,\n                    users.name AS user_name,\n                    users.email AS user_email\n             FROM jobs\n             INNER JOIN providers ON providers.id = jobs.provider_id\n             INNER JOIN users ON users.id = jobs.user_id\n             $where\n             ORDER BY jobs.created_at DESC, jobs.priority ASC, jobs.position ASC, jobs.id DESC\n             LIMIT :limit OFFSET :offset";
+
+        // Use explicit binding for limit/offset (PDO prepared statement requires int cast)
+        $params['limit'] = $limit;
+        $params['offset'] = $offset;
+
+        $rowsStmt = Db::run($sql, $params);
+        $rows = $rowsStmt->fetchAll(PDO::FETCH_ASSOC);
+
+        return [
+            'rows' => $rows !== false ? $rows : [],
+            'total' => $total,
+        ];
+    }
+
+    /**
      * Fetches a single job row joined with provider and user metadata.
      *
      * @return array<string, mixed>|null
