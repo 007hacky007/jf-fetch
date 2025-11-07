@@ -12,7 +12,6 @@ import {
 	progressBarColor,
 	parseIsoDate,
 } from './utils.js';
-import { renderActivity } from './activity.js';
 
 let dragSourceId = null;
 
@@ -505,30 +504,6 @@ function handleJobEvent(event) {
 		}
 	} else {
 		requiresRefresh = true;
-	}
-
-	// After state updated (if merged), decide whether to log activity
-	let currentStatus = job.status;
-	if (!requiresRefresh && job.id != null) {
-		const existingAfter = state.jobs.find((j) => Number(j.id) === Number(job.id));
-		if (existingAfter) currentStatus = existingAfter.status;
-	}
-
-	const isStatusChange = previousStatus !== null && currentStatus !== previousStatus;
-	const isNewJob = previousStatus === null && !!job.id;
-	const isTerminalEvent = ['job.completed', 'job.failed', 'job.removed', 'job.deleted'].includes(event.type);
-	const isNonUpdate = event.type !== 'job.updated';
-
-	if (isNonUpdate || isStatusChange || isNewJob || isTerminalEvent) {
-		state.activity.unshift({
-			type: event.type,
-			job_id: event.job?.id ?? null,
-			title: event.job?.title ?? 'Unknown',
-			status: currentStatus,
-			at: new Date().toISOString(),
-		});
-		state.activity = state.activity.slice(0, 25);
-		renderActivity();
 	}
 
 	if (requiresRefresh) {

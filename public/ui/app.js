@@ -23,7 +23,6 @@ import { state, els, API, providerCatalog } from './modules/context.js';
 		parseIsoDate,
 	} from './modules/utils.js';
 	import { injectUtilityStyles } from './modules/styles.js';
-	import { wireActivity, renderActivity } from './modules/activity.js';
 	import {
 		wireStorage,
 		loadStorage,
@@ -50,7 +49,6 @@ import { state, els, API, providerCatalog } from './modules/context.js';
 		wireAdmin();
 		wireSettings();
 		wireStorage();
-		wireActivity();
 		showLogin();
 		hydrateSession();
 	}
@@ -505,7 +503,6 @@ function resetState() {
 	state.jobs = [];
 	state.storage = [];
 	state.storageUpdatedAt = null;
-	state.activity = [];
 	state.isAdmin = false;
 	state.usersLoading = false;
 	state.jobNotifications.clear();
@@ -521,7 +518,6 @@ function resetState() {
 	renderSearchResults();
 	renderJobs();
 	renderStorage();
-	renderActivity();
 	renderUsers();
 	renderAudit();
 	renderSettings();
