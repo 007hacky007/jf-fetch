@@ -153,6 +153,46 @@ final class JobsStreamEndpointTest extends TestCase
         $this->assertSame([250000], $result['sleepCalls']);
     }
 
+    public function testRespectsExplicitSinceAndAfterIdQueryParameters(): void
+    {
+        $calls = [];
+        $rows = [[
+            'id' => 500,
+            'status' => 'queued',
+            'updated_at' => '2025-02-01T10:00:00.000000+00:00',
+        ]];
+
+        $result = $this->executeStream([
+            'authClass' => JobsStreamAuthStub::class,
+            'maxLoops' => 1,
+            'disablePadding' => true,
+            'updatedSince' => static function (string $since, bool $isAdmin, int $userId, int $limit, ?int $afterId) use (&$calls, $rows) {
+                $calls[] = [$since, $afterId];
+                return $rows;
+            },
+            'formatJob' => static function (array $row, bool $isAdmin): array {
+                return [
+                    'id' => (int) $row['id'],
+                    'status' => (string) $row['status'],
+                    'admin' => $isAdmin,
+                ];
+            },
+        ], [], [
+            'since' => '2025-01-31T09:59:00.000000+00:00',
+            'after_id' => '400',
+        ]);
+
+        $this->assertSame('' .
+            ": connected\n" .
+            "retry: 3000\n\n" .
+            "id: 2025-02-01T10:00:00.000000+00:00|500\n" .
+            "event: job.updated\n" .
+            'data: {"id":500,"status":"queued","admin":true}' . "\n\n",
+            $result['output']
+        );
+        $this->assertSame([['2025-01-31T09:59:00.000000+00:00', 400]], $calls);
+    }
+
     /**
      * @param array<string, mixed> $overrideConfig
      * @param array<string, mixed> $serverOverrides
