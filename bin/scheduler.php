@@ -219,11 +219,35 @@ function sanitizeFilename(string $name): string
 {
 	// Normalize unicode whitespace to space
 	$name = preg_replace('/\s+/u', ' ', $name) ?? $name;
+
+	// Explicit map for common Central European diacritics so we preserve base letters.
+	$map = [
+		// Czech & Slovak
+		'á'=>'a','č'=>'c','ď'=>'d','é'=>'e','ě'=>'e','í'=>'i','ň'=>'n','ó'=>'o','ř'=>'r','š'=>'s','ť'=>'t','ú'=>'u','ů'=>'u','ý'=>'y','ž'=>'z',
+		'Á'=>'A','Č'=>'C','Ď'=>'D','É'=>'E','Ě'=>'E','Í'=>'I','Ň'=>'N','Ó'=>'O','Ř'=>'R','Š'=>'S','Ť'=>'T','Ú'=>'U','Ů'=>'U','Ý'=>'Y','Ž'=>'Z',
+		'ľ'=>'l','ĺ'=>'l','ô'=>'o','ŕ'=>'r','Ĺ'=>'L','Ľ'=>'L','Ŕ'=>'R','Ô'=>'O','Ä'=>'A','ä'=>'a',
+		// Polish
+		'ą'=>'a','ć'=>'c','ę'=>'e','ł'=>'l','ń'=>'n','ś'=>'s','ź'=>'z','ż'=>'z',
+		'Ą'=>'A','Ć'=>'C','Ę'=>'E','Ł'=>'L','Ń'=>'N','Ś'=>'S','Ź'=>'Z','Ż'=>'Z',
+		// German
+		'ä'=>'ae','ö'=>'oe','ü'=>'ue','ß'=>'ss','Ä'=>'Ae','Ö'=>'Oe','Ü'=>'Ue',
+		// French
+		'à'=>'a','â'=>'a','æ'=>'ae','ç'=>'c','é'=>'e','è'=>'e','ê'=>'e','ë'=>'e','ï'=>'i','î'=>'i','ô'=>'o','œ'=>'oe','ù'=>'u','û'=>'u','ü'=>'u','ÿ'=>'y',
+		'À'=>'A','Â'=>'A','Æ'=>'Ae','Ç'=>'C','É'=>'E','È'=>'E','Ê'=>'E','Ë'=>'E','Ï'=>'I','Î'=>'I','Ô'=>'O','Œ'=>'Oe','Ù'=>'U','Û'=>'U','Ü'=>'U','Ÿ'=>'Y',
+		// Spanish & Portuguese
+		'ñ'=>'n','Ñ'=>'N','á'=>'a','Á'=>'A','é'=>'e','É'=>'E','í'=>'i','Í'=>'I','ó'=>'o','Ó'=>'O','ú'=>'u','Ú'=>'U','ü'=>'u','Ü'=>'U','ã'=>'a','Ã'=>'A','õ'=>'o','Õ'=>'O','ê'=>'e','Ê'=>'E','ô'=>'o','Ô'=>'O','à'=>'a','À'=>'A','ç'=>'c','Ç'=>'C',
+		// Scandinavian (avoid overwriting German ae/oe forms; keep simple forms where not conflicting)
+		'å'=>'a','Å'=>'A','ø'=>'o','Ø'=>'O','æ'=>'ae','Æ'=>'Ae',
+		// Hungarian (retain German-style oe/ue for shared characters; map long double-accent letters)
+		'ő'=>'o','ű'=>'u','Ő'=>'O','Ű'=>'U','í'=>'i','Í'=>'I','é'=>'e','É'=>'E','á'=>'a','Á'=>'A','ó'=>'o','Ó'=>'O','ú'=>'u','Ú'=>'U',
+	];
+	// Perform replacements (note multi-letter expansions like ae/oe/ss occur prior to unsafe char stripping)
+	$name = strtr($name, $map);
 	// Remove BBCode remnants or stray brackets leftover
 	$name = preg_replace('/\[[^\]]+\]/', '', $name) ?? $name;
 	// Strip any path separators
 	$name = str_replace(['/', '\\'], ' ', $name);
-	// Allow safe chars only
+	// Allow safe chars only (keeps comma); plus signs will be dropped as unsafe
 	$name = preg_replace("/[^A-Za-z0-9 ._()'\-,]/u", '', $name) ?? $name;
 	// Collapse multiple spaces
 	$name = trim(preg_replace('/ {2,}/', ' ', $name) ?? $name);
@@ -235,7 +259,31 @@ function sanitizeFilename(string $name): string
  */
 function deriveOutputFilename(string $title, string $uri): string
 {
-	$sanitized = sanitizeFilename($title);
+	// Jellyfin-friendly matching: if the title contains a trailing language code list just before the year,
+	// strip it. Example: "Movie Name - EN, CZ, ENG+tit (2024)" -> "Movie Name (2024)".
+	// We only remove it if EVERY comma-separated token matches the language pattern to avoid false positives.
+	$cleanTitle = $title;
+	if (preg_match('/^(.*?)\s-\s([^()]+?)\s*(\(\d{4}\))$/u', trim($title), $m)) {
+		$prefix = trim($m[1]);
+		$list = $m[2];
+		$yearPart = $m[3];
+		$tokens = array_map('trim', explode(',', $list));
+		$allLang = true;
+		foreach ($tokens as $t) {
+			if ($t === '') { $allLang = false; break; }
+			if (!preg_match('/^[A-Z]{2,5}(?:\+(?:tit|sub))?$/', $t)) { $allLang = false; break; }
+		}
+		if ($allLang) {
+			$hasSuffix = false;
+			foreach ($tokens as $t) { if (str_contains($t, '+')) { $hasSuffix = true; break; } }
+			// Strip only if 3+ language tokens OR any token carries a suffix (+tit/+sub)
+			if (count($tokens) >= 3 || $hasSuffix) {
+				$cleanTitle = $prefix . ' ' . $yearPart; // Ensure single space before year
+			}
+		}
+	}
+
+	$sanitized = sanitizeFilename($cleanTitle);
 	if ($sanitized === '') {
 		$sanitized = 'download';
 	}
