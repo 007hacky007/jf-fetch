@@ -330,6 +330,10 @@ function renderJobActions(job, canControl) {
 		buttons.push(`<button type="button" data-job-action="delete-file" data-job-id="${jobId}" class="job-btn job-btn-danger">Delete Partial</button>`);
 	}
 
+	if (status === 'failed') {
+		buttons.push(`<button type="button" data-job-action="retry" data-job-id="${jobId}" class="job-btn">Retry</button>`);
+	}
+
 	return `<div class="flex flex-wrap justify-end gap-2">${buttons.join('')}</div>`;
 }
 
@@ -350,6 +354,10 @@ async function handleJobAction(jobId, action) {
 		case 'resume':
 			endpoint = API.jobResume;
 			successMessage = 'Job resumed.';
+			break;
+		case 'retry':
+			endpoint = API.jobRetry;
+			successMessage = 'Job re-queued.';
 			break;
 		case 'download':
 			// Directly trigger browser download; no fetch/JSON handling.

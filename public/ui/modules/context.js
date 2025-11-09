@@ -122,6 +122,7 @@ export const API = {
 	jobCancel: '/api/jobs/cancel',
 	jobPause: '/api/jobs/pause',
 	jobResume: '/api/jobs/resume',
+	jobRetry: '/api/jobs/retry',
 	jobPriority: '/api/jobs/priority',
 	jobReorder: '/api/jobs/reorder',
 	jobDelete: '/api/jobs/delete',
