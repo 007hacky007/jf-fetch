@@ -62,8 +62,12 @@ if ($aria2Gid !== '') {
         $aria2 = new Aria2Client();
         $aria2->remove($aria2Gid, true);
     } catch (Throwable $exception) {
-        Http::error(502, 'Failed to cancel aria2 transfer: ' . $exception->getMessage());
-        exit;
+        if (!isRecoverableAriaRemovalError($exception)) {
+            Http::error(502, 'Failed to cancel aria2 transfer: ' . $exception->getMessage());
+            exit;
+        }
+
+        error_log(sprintf('Cancel request for job %d: aria2 reported stale GID %s (%s). Treating as already removed.', $jobId, $aria2Gid, $exception->getMessage()));
     }
 }
 
@@ -105,3 +109,18 @@ Audit::record((int) $user['id'], 'job.cancel.requested', 'job', $jobId, [
 Events::notify((int) $user['id'], $jobId, 'job.cancel.requested', [
     'title' => $updated['title'] ?? null,
 ]);
+
+function isRecoverableAriaRemovalError(Throwable $exception): bool
+{
+    $message = strtolower($exception->getMessage());
+
+    if (str_contains($message, 'unexpected http status: 400')) {
+        return true;
+    }
+
+    if (str_contains($message, 'not found') || str_contains($message, 'invalid gid')) {
+        return true;
+    }
+
+    return false;
+}

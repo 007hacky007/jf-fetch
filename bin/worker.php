@@ -9,6 +9,7 @@ use App\Infra\Db;
 use App\Infra\Events;
 use App\Infra\Jellyfin;
 use App\Support\Clock;
+use RuntimeException;
 
 /**
  * Worker loop: polls aria2 for job progress, updates the database, and
@@ -131,7 +132,13 @@ function handleJob(array $job, Aria2Client $aria2): void
 	try {
 		$status = $aria2->tellStatus((string) $job['aria2_gid']);
 	} catch (Throwable $exception) {
-		logError(sprintf('Failed to query aria2 for job %d: %s', $job['id'], $exception->getMessage()));
+		if (!isStaleAria2Reference($exception)) {
+			logError(sprintf('Failed to query aria2 for job %d: %s', $job['id'], $exception->getMessage()));
+
+			return;
+		}
+
+		handleLostAria2Reference($job, $aria2, $exception);
 
 		return;
 	}
@@ -293,7 +300,7 @@ function handleFailure(array $job, array $status, string $reason): void
 function markCanceled(int $jobId, int $userId, string $reason): void
 {
 	Db::run(
-		"UPDATE jobs SET status = 'canceled', error_text = :error, speed_bps = NULL, eta_seconds = NULL, updated_at = :updated_at WHERE id = :id",
+		"UPDATE jobs SET status = 'canceled', error_text = :error, speed_bps = NULL, eta_seconds = NULL, aria2_gid = NULL, tmp_path = NULL, updated_at = :updated_at WHERE id = :id",
 		[
 			'error' => $reason,
 			'updated_at' => Clock::nowString(),
@@ -309,6 +316,166 @@ function markCanceled(int $jobId, int $userId, string $reason): void
 	Events::notify($userId, $jobId, 'job.canceled', ['reason' => $reason]);
 
 	logInfo(sprintf('Job %d canceled: %s', $jobId, $reason));
+}
+
+function handleLostAria2Reference(array $job, Aria2Client $aria2, Throwable $exception): void
+{
+	$message = sprintf('Job %d lost aria2 reference (%s).', (int) $job['id'], $exception->getMessage());
+	logInfo($message . ' Attempting recovery.');
+
+	if (attemptRestartLostTransfer($job, $aria2)) {
+		return;
+	}
+
+	removePartialFiles($job);
+	markCanceled((int) $job['id'], (int) $job['user_id'], 'Canceled after failed aria2 restart; partial download removed.');
+	logInfo(sprintf('Job %d canceled after recovery attempt failed.', (int) $job['id']));
+}
+
+function isStaleAria2Reference(Throwable $exception): bool
+{
+	$message = strtolower($exception->getMessage());
+
+	if (str_contains($message, 'unexpected http status: 400')) {
+		return true;
+	}
+
+	return str_contains($message, 'not found') || str_contains($message, 'invalid gid');
+}
+
+function attemptRestartLostTransfer(array $job, Aria2Client $aria2): bool
+{
+	$sourceUrl = isset($job['source_url']) ? trim((string) $job['source_url']) : '';
+	if ($sourceUrl === '') {
+		logInfo(sprintf('Job %d cannot be restarted: missing source URL.', (int) $job['id']));
+		return false;
+	}
+
+	$downloadDir = (string) Config::get('paths.downloads');
+	try {
+		ensureDirectory($downloadDir);
+	} catch (Throwable $exception) {
+		logError(sprintf('Job %d restart failed: unable to prepare download directory (%s).', (int) $job['id'], $exception->getMessage()));
+		return false;
+	}
+
+	$options = [
+		'dir' => $downloadDir,
+	];
+
+	$tmpPath = isset($job['tmp_path']) ? (string) $job['tmp_path'] : '';
+	if ($tmpPath !== '') {
+		$basename = basename($tmpPath);
+		if ($basename !== '' && $basename !== '.' && $basename !== '..') {
+			$options['out'] = $basename;
+		}
+	} else {
+		$derived = deriveResumeFilename((string) ($job['title'] ?? ''), $sourceUrl);
+		if ($derived !== '') {
+			$options['out'] = $derived;
+		}
+	}
+
+	try {
+		$gid = $aria2->addUri([$sourceUrl], $options);
+	} catch (Throwable $exception) {
+		logError(sprintf('Job %d restart failed: %s', (int) $job['id'], $exception->getMessage()));
+		return false;
+	}
+
+	$tmpPathToPersist = $tmpPath;
+	if ($tmpPathToPersist === '' && isset($options['out'])) {
+		$tmpPathToPersist = rtrim($downloadDir, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . $options['out'];
+	}
+
+	$progress = isset($job['progress']) ? (int) $job['progress'] : 0;
+
+	Db::run(
+		"UPDATE jobs SET status = 'downloading', progress = :progress, speed_bps = NULL, eta_seconds = NULL, aria2_gid = :gid, error_text = NULL, tmp_path = :tmp_path, updated_at = :updated_at WHERE id = :id",
+		[
+			'progress' => $progress,
+			'gid' => $gid,
+			'tmp_path' => $tmpPathToPersist !== '' ? $tmpPathToPersist : null,
+			'updated_at' => Clock::nowString(),
+			'id' => $job['id'],
+		]
+	);
+
+	Audit::record((int) $job['user_id'], 'job.requeued', 'job', (int) $job['id'], [
+		'title' => $job['title'] ?? null,
+		'aria2_gid' => $gid,
+		'source_url' => $sourceUrl,
+	]);
+	Events::notify((int) $job['user_id'], (int) $job['id'], 'job.requeued', [
+		'title' => $job['title'] ?? null,
+		'aria2_gid' => $gid,
+	]);
+
+	logInfo(sprintf('Job %d restarted with new aria2 gid %s.', (int) $job['id'], $gid));
+
+	return true;
+}
+
+function deriveResumeFilename(string $title, string $sourceUrl): string
+{
+	$path = parse_url($sourceUrl, PHP_URL_PATH);
+	if (is_string($path)) {
+		$basename = basename($path);
+		if ($basename !== '' && $basename !== '.' && $basename !== '..') {
+			return $basename;
+		}
+	}
+
+	$slug = preg_replace('/[^A-Za-z0-9._-]+/', '_', $title) ?? '';
+	$slug = trim($slug, '_');
+	if ($slug === '') {
+		$slug = 'download';
+	}
+
+	$extension = '';
+	if (preg_match('~\.(mkv|mp4|avi|mov|webm|mpg|mpeg)$~i', $sourceUrl, $matches)) {
+		$extension = '.' . strtolower($matches[1]);
+	}
+
+	if ($extension !== '' && !str_ends_with(strtolower($slug), strtolower($extension))) {
+		$slug .= $extension;
+	}
+
+	return $slug;
+}
+
+function removePartialFiles(array $job): void
+{
+	$tmpPath = isset($job['tmp_path']) ? (string) $job['tmp_path'] : '';
+	if ($tmpPath === '') {
+		return;
+	}
+
+	$paths = [$tmpPath, $tmpPath . '.aria2'];
+	foreach ($paths as $path) {
+		if ($path === '' || !file_exists($path) || is_dir($path)) {
+			continue;
+		}
+
+		if (@unlink($path)) {
+			logInfo(sprintf('Removed partial download file %s for job %d.', $path, (int) $job['id']));
+		}
+	}
+}
+
+function ensureDirectory(string $path): void
+{
+	if ($path === '') {
+		return;
+	}
+
+	if (is_dir($path)) {
+		return;
+	}
+
+	if (!mkdir($path, 0775, true) && !is_dir($path)) {
+		throw new RuntimeException('Unable to create directory: ' . $path);
+	}
 }
 
 /**
