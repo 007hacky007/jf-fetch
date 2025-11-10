@@ -57,6 +57,7 @@ export const els = {
 	queueSelectionBtn: document.getElementById('queue-selection-btn'),
 	searchResults: document.getElementById('search-results'),
 	searchMeta: document.getElementById('search-meta'),
+	searchWarnings: document.getElementById('search-warnings'),
 	searchEmpty: document.getElementById('search-empty'),
 	searchLoading: document.getElementById('search-loading'),
 	searchErrors: document.getElementById('search-errors'),

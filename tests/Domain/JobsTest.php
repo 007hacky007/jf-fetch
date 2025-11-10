@@ -64,6 +64,80 @@ final class JobsTest extends TestCase
         $this->assertSame(200, $formatted[1]['priority']);
     }
 
+    public function testFindExistingDownloadsMatchingReturnsCompletedTitles(): void
+    {
+        $pdo = $this->connection();
+        $timestamp = new DateTimeImmutable('2024-02-01T00:00:00+00:00');
+
+        $statement = $pdo->prepare('INSERT INTO jobs (
+            id, user_id, provider_id, external_id, title, source_url, category, status, progress, speed_bps,
+            eta_seconds, priority, position, aria2_gid, tmp_path, final_path, error_text, deleted_at,
+            created_at, updated_at
+        ) VALUES (
+            :id, :user_id, :provider_id, :external_id, :title, :source_url, :category, :status, :progress,
+            :speed_bps, :eta_seconds, :priority, :position, :aria2_gid, :tmp_path, :final_path, :error_text,
+            :deleted_at, :created_at, :updated_at
+        )');
+
+        $statement->execute([
+            'id' => 3,
+            'user_id' => 1,
+            'provider_id' => 1,
+            'external_id' => 'ext-3',
+            'title' => 'The Matrix (1999)',
+            'source_url' => 'https://example.test/matrix',
+            'category' => 'Movies',
+            'status' => 'completed',
+            'progress' => 100,
+            'speed_bps' => null,
+            'eta_seconds' => null,
+            'priority' => 50,
+            'position' => 3,
+            'aria2_gid' => null,
+            'tmp_path' => null,
+            'final_path' => '/library/Movies/The Matrix (1999)/The Matrix (1999).mkv',
+            'error_text' => null,
+            'deleted_at' => null,
+            'created_at' => $timestamp->format('Y-m-d\TH:i:s.uP'),
+            'updated_at' => $timestamp->format('Y-m-d\TH:i:s.uP'),
+        ]);
+
+        $statement->execute([
+            'id' => 4,
+            'user_id' => 1,
+            'provider_id' => 1,
+            'external_id' => 'ext-4',
+            'title' => 'The.Simpsons.S37E05.1080p.HEVC.x265-MeGusta.mkv',
+            'source_url' => 'https://example.test/simpsons',
+            'category' => 'TV',
+            'status' => 'completed',
+            'progress' => 100,
+            'speed_bps' => null,
+            'eta_seconds' => null,
+            'priority' => 51,
+            'position' => 4,
+            'aria2_gid' => null,
+            'tmp_path' => null,
+            'final_path' => '/library/TV/The Simpsons/Season 37/The.Simpsons.S37E05.1080p.HEVC.x265-MeGusta.mkv',
+            'error_text' => null,
+            'deleted_at' => null,
+            'created_at' => $timestamp->modify('+1 minute')->format('Y-m-d\TH:i:s.uP'),
+            'updated_at' => $timestamp->modify('+1 minute')->format('Y-m-d\TH:i:s.uP'),
+        ]);
+
+        $matches = Jobs::findExistingDownloadsMatching('matrix');
+        $this->assertSame(['The Matrix (1999)'], $matches);
+
+        $simpsonsMatches = Jobs::findExistingDownloadsMatching('The Simpsons');
+        $this->assertSame(['The.Simpsons.S37E05.1080p.HEVC.x265-MeGusta.mkv'], $simpsonsMatches);
+        $this->assertSame(['The.Simpsons.S37E05.1080p.HEVC.x265-MeGusta.mkv'], Jobs::findExistingDownloadsMatching('simpsons'));
+
+        $this->assertSame([], Jobs::findExistingDownloadsMatching('Second'));
+        $this->assertSame([], Jobs::findExistingDownloadsMatching(''));
+
+        $pdo->exec('DELETE FROM jobs WHERE id IN (3, 4)');
+    }
+
     private function createSchema(): void
     {
         $pdo = $this->connection();

@@ -278,6 +278,80 @@ final class Jobs
     }
 
     /**
+     * Returns distinct titles of completed (and not deleted) jobs that contain the provided search fragment.
+     * Used to warn users about potential duplicate downloads during provider search.
+     *
+     * @return array<int, string>
+     */
+    public static function findExistingDownloadsMatching(string $search, int $limit = 10): array
+    {
+        $fragment = trim($search);
+        if ($fragment === '') {
+            return [];
+        }
+
+        $limit = max(1, min(50, $limit));
+        $normalizedNeedle = self::normalizeSearchFragment($fragment);
+        if ($normalizedNeedle === '') {
+            return [];
+        }
+
+        $rawPattern = '%' . strtolower($fragment) . '%';
+        $normalizedFragment = strtolower($fragment);
+        $normalizedFragment = str_replace(['.', '_', '-', '/', '\\'], ' ', $normalizedFragment);
+        $normalizedFragment = preg_replace('/\s+/', ' ', $normalizedFragment ?? '') ?? '';
+        $normalizedFragment = trim($normalizedFragment);
+        $normalizedPattern = $normalizedFragment !== '' ? '%' . $normalizedFragment . '%' : $rawPattern;
+
+        $sql = 'SELECT DISTINCT title
+                FROM jobs
+                WHERE status = :status
+                  AND (deleted_at IS NULL OR deleted_at = "")
+                  AND (
+                        LOWER(title) LIKE :raw_pattern
+                        OR LOWER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(title, ".", " "), "_", " "), "-", " "), "/", " "), "\\", " ")) LIKE :normalized_pattern
+                    )
+                ORDER BY LOWER(title) ASC
+                LIMIT ' . $limit;
+
+        $statement = Db::run($sql, [
+            'status' => 'completed',
+            'raw_pattern' => $rawPattern,
+            'normalized_pattern' => $normalizedPattern,
+        ]);
+
+        $rows = $statement->fetchAll(PDO::FETCH_COLUMN);
+        if ($rows === false) {
+            return [];
+        }
+
+        $titles = [];
+        foreach ($rows as $row) {
+            if (!is_string($row)) {
+                continue;
+            }
+            $title = trim($row);
+            if ($title === '') {
+                continue;
+            }
+            $haystack = self::normalizeSearchFragment($title);
+            if ($haystack === '' || !str_contains($haystack, $normalizedNeedle)) {
+                continue;
+            }
+            $titles[] = $title;
+        }
+
+        return $titles;
+    }
+
+    private static function normalizeSearchFragment(string $value): string
+    {
+        $normalized = strtolower($value);
+        $normalized = preg_replace('/[^a-z0-9]+/', '', $normalized ?? '') ?? '';
+        return $normalized;
+    }
+
+    /**
      * Aggregates statistics about jobs and downloaded data.
      * NOTE: File size aggregation reads file sizes from disk for completed jobs.
      * For large installations consider persisting file_size_bytes in the database.

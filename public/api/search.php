@@ -10,6 +10,7 @@ use App\Infra\ProviderSecrets;
 use App\Providers\VideoProvider;
 use App\Providers\WebshareProvider;
 use App\Providers\KraSkProvider;
+use App\Domain\Jobs;
 
 header('Content-Type: application/json');
 
@@ -39,6 +40,7 @@ if ($configuredDefault <= 0) {
 }
 $limit = $limitParam > 0 ? max(1, min(100, $limitParam)) : max(1, min(100, $configuredDefault));
 $filterProviders = isset($_GET['providers']) && is_array($_GET['providers']) ? array_map('strval', $_GET['providers']) : null;
+$duplicates = Jobs::findExistingDownloadsMatching($query, 12);
 
 $rows = Db::run('SELECT * FROM providers WHERE enabled = 1 ORDER BY name ASC')->fetchAll();
 if ($rows === false) {
@@ -78,6 +80,7 @@ foreach ($rows as $row) {
 Http::json(200, [
     'data' => $results,
     'errors' => $errors,
+    'duplicates' => $duplicates,
 ]);
 
 /**

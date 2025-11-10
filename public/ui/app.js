@@ -143,6 +143,7 @@ function wireSearch() {
 		toggleElement(els.searchLoading, true);
 		els.searchResults.innerHTML = '';
 		els.searchMeta.textContent = '';
+		renderSearchWarnings([]);
 		state.selectedSearch.clear();
 		updateQueueButton();
 
@@ -156,6 +157,7 @@ function wireSearch() {
 
 			renderSearchResults();
 			renderSearchMeta(query, state.searchResults.length, providers);
+			renderSearchWarnings(Array.isArray(response?.duplicates) ? response.duplicates : []);
 			renderSearchErrors(response?.errors ?? []);
 		} catch (error) {
 			toggleElement(els.searchErrors, true);
@@ -166,6 +168,7 @@ function wireSearch() {
 			state.selectedSearch.clear();
 			renderSearchResults();
 			renderSearchMeta(els.searchQuery?.value ?? '', 0, providers);
+			renderSearchWarnings([]);
 		} finally {
 			toggleElement(els.searchLoading, false);
 		}
@@ -548,6 +551,7 @@ function resetState() {
 	renderJobs();
 	renderStorage();
 	renderStats();
+	renderSearchWarnings([]);
 	renderUsers();
 	renderAudit();
 	renderSettings();
@@ -1245,6 +1249,23 @@ function renderSearchResults() {
 		input.addEventListener('change', handleResultSelectionChange);
 	});
 	updateQueueButton();
+}
+
+function renderSearchWarnings(duplicates) {
+	const el = els.searchWarnings;
+	if (!(el instanceof HTMLElement)) {
+		return;
+	}
+	const items = Array.isArray(duplicates)
+		? Array.from(new Set(duplicates.filter((value) => typeof value === 'string' && value.trim() !== '').map((value) => value.trim())))
+		: [];
+	if (items.length === 0) {
+		el.textContent = '';
+		toggleElement(el, false);
+		return;
+	}
+	el.innerHTML = `<span class="font-semibold">Already downloaded:</span> ${escapeHtml(items.join(', '))}`;
+	toggleElement(el, true);
 }
 
 function renderSearchMeta(query, count, providers) {
