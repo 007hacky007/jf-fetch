@@ -8,10 +8,6 @@ use App\Infra\Http;
 use App\Infra\KraskaMenuCache;
 use App\Infra\ProviderSecrets;
 use App\Providers\KraSkProvider;
-use DateTimeImmutable;
-use PDO;
-
-header('Content-Type: application/json');
 
 if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
     Http::error(405, 'Method not allowed');
@@ -76,7 +72,7 @@ try {
         $provider = new KraSkProvider($config);
         $result = $provider->browseMenu($path);
 
-        $now = new DateTimeImmutable();
+        $now = new \DateTimeImmutable();
         $fetchedAt = $now->format(DATE_ATOM);
         $fetchedTs = $now->getTimestamp();
 
