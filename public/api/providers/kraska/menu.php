@@ -64,7 +64,7 @@ try {
         }
 
         if ($cached !== null) {
-            $result = $cached['data'];
+            $result = filterMenuPayload($cached['data'] ?? []);
             $fetchedAt = $cached['fetched_at'];
             $fetchedTs = (int) $cached['fetched_ts'];
             $cacheHit = true;
@@ -74,7 +74,7 @@ try {
     if ($result === null) {
         $config = ProviderSecrets::decrypt($providerRow);
         $provider = new KraSkProvider($config);
-        $result = $provider->browseMenu($path);
+        $result = filterMenuPayload($provider->browseMenu($path));
 
         $now = new \DateTimeImmutable();
         $fetchedAt = $now->format(DATE_ATOM);
@@ -144,4 +144,37 @@ function wantsForceRefresh(mixed $raw): bool
     }
 
     return in_array($value, ['1', 'true', 'yes', 'y', 'force', 'refresh'], true);
+}
+
+/**
+ * Removes Kra.sk menu entries whose type is not supported by the UI.
+ *
+ * @param array<string,mixed> $payload
+ * @return array<string,mixed>
+ */
+function filterMenuPayload(array $payload): array
+{
+    if (!isset($payload['items']) || !is_array($payload['items'])) {
+        return $payload;
+    }
+
+    $disallowed = ['action', 'ldir', 'cmd'];
+    $filtered = [];
+
+    foreach ($payload['items'] as $item) {
+        if (!is_array($item)) {
+            continue;
+        }
+
+        $type = strtolower(trim((string) ($item['type'] ?? '')));
+        if ($type !== '' && in_array($type, $disallowed, true)) {
+            continue;
+        }
+
+        $filtered[] = $item;
+    }
+
+    $payload['items'] = $filtered;
+
+    return $payload;
 }
