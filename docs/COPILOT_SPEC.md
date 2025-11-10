@@ -88,6 +88,7 @@
 Pages:
 
 * **Search**: input + provider checkboxes; results show metadata; select items; **Add to queue**.
+* **Kra.sk Library**: browsing directories shows a queue checkbox on series/seasons; selecting it recursively queues every playable item inside (entire series or specific seasons).
 * **Queue**: live progress bars (SSE), speed, ETA; cancel/pause/resume; priority dropdown; drag&drop reorder (persist to server).
 * **Admin/Providers**: add/edit credentials; test connection (admin only).
 * **Admin/Users**: CRUD users/roles (admin only).

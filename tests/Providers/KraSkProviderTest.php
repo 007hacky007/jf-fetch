@@ -9,11 +9,11 @@ use App\Providers\RateLimitDeferredException;
 
 final class KraSkProviderTest extends TestCase
 {
-    private function providerWithFixtures(array $apiResponses, array $scResponses): KraSkProvider
+    private function providerWithFixtures(array $apiResponses, array $scResponses, array $overrides = []): KraSkProvider
     {
         $apiIdx = 0;
         $scIdx = 0;
-    $apiAdapter = function(string $endpoint, array $payload, bool $requireAuth, bool $attachSession, bool $mutateSession, ...$rest) use (&$apiResponses, &$apiIdx) {
+        $apiAdapter = function(string $endpoint, array $payload, bool $requireAuth, bool $attachSession, bool $mutateSession, ...$rest) use (&$apiResponses, &$apiIdx) {
             $fixture = $apiResponses[$apiIdx] ?? null;
             $apiIdx++;
             if ($fixture === null || $fixture['endpoint'] !== $endpoint) {
@@ -24,7 +24,7 @@ final class KraSkProviderTest extends TestCase
             }
             return $fixture['response'];
         };
-        $scAdapter = function(string $url, bool $withAuth, $provider = null) use (&$scResponses, &$scIdx) {
+    $scAdapter = function(string $url, bool $withAuth, $provider = null) use (&$scResponses, &$scIdx) {
             $fixture = $scResponses[$scIdx] ?? null;
             $scIdx++;
             if ($fixture === null || $fixture['url'] !== $url) {
@@ -32,13 +32,16 @@ final class KraSkProviderTest extends TestCase
             }
             return $fixture['response'];
         };
-        return new KraSkProvider([
+    $config = array_merge([
             'username' => 'u',
             'password' => 'p',
             'uuid' => 'test-uuid', // stable for deterministic query string in tests
             'enrich_limit' => 0, // disable enrichment for predictable test
             'debug' => true,
-        ], $apiAdapter, $scAdapter);
+            'ident_rate_limit_seconds' => 0,
+        ], $overrides);
+
+    return new KraSkProvider($config, $apiAdapter, $scAdapter);
     }
 
     private function primeStreamCinemaToken(KraSkProvider $provider): void
@@ -75,9 +78,9 @@ final class KraSkProviderTest extends TestCase
             ],
         ];
         $provider = $this->providerWithFixtures($apiResponses, $scResponses);
-    $results = $provider->search('movie', 2); // limit triggers early break after first category
+        $results = $provider->search('movie', 2); // limit triggers early break after first category
         $this->assertCount(2, $results);
-    $this->assertSame('/Play/abc', $results[0]['id']);
+        $this->assertSame('/Play/abc', $results[0]['id']);
         $this->assertSame('kraska', $results[0]['provider']);
     }
 
@@ -116,13 +119,30 @@ final class KraSkProviderTest extends TestCase
                                 'en' => ['thumb' => 'https://example.com/thumb.jpg'],
                             ],
                         ],
+                        [
+                            'type' => 'video',
+                            'title' => 'South Park S01E01',
+                            'url' => '/Play/3844/1/1',
+                            'strms' => [
+                                [
+                                    'provider' => 'kraska',
+                                    'sid' => '1457729',
+                                    'url' => '/ws2/a1SFWQLtgnTlItNoaZ8YCxomi4zkugAM/1457729',
+                                ],
+                            ],
+                        ],
+                        [
+                            'type' => 'next',
+                            'label' => 'Další strana',
+                            'url' => 'cmd://NextPage',
+                            'path' => '/?page=2',
+                        ],
                     ],
                     'system' => ['setPluginCategory' => 'Home'],
                     'filter' => ['view' => 'movies'],
                 ],
             ],
         ];
-
         $provider = $this->providerWithFixtures($apiResponses, $scResponses);
         $this->primeStreamCinemaToken($provider);
 
@@ -131,23 +151,38 @@ final class KraSkProviderTest extends TestCase
         $this->assertSame('/', $result['path']);
         $this->assertSame('Home', $result['title']);
         $this->assertArrayHasKey('filter', $result);
-        $this->assertCount(2, $result['items']);
+        $this->assertCount(4, $result['items']);
 
         $dir = $result['items'][0];
         $this->assertSame('dir', $dir['type']);
         $this->assertSame('/Movies', $dir['path']);
-        $this->assertFalse($dir['selectable']);
+        $this->assertTrue($dir['selectable']);
+        $this->assertSame('branch', $dir['queue_mode']);
 
         $video = $result['items'][1];
         $this->assertSame('video', $video['type']);
         $this->assertTrue($video['selectable']);
         $this->assertSame('/Play/123', $video['ident']);
         $this->assertSame('kraska', $video['provider']);
+        $this->assertSame('single', $video['queue_mode']);
         $this->assertSame(2020, $video['meta']['year']);
         $this->assertSame('1080p H264', $video['meta']['quality']);
         $this->assertSame(['EN', 'CZ'], $video['meta']['languages']);
         $this->assertSame('An exciting film.', $video['summary']);
         $this->assertSame('https://example.com/thumb.jpg', $video['art']['thumb']);
+
+        $episode = $result['items'][2];
+        $this->assertSame('video', $episode['type']);
+        $this->assertSame('/Play/3844/1/1', $episode['ident']);
+        $this->assertTrue($episode['selectable']);
+        $this->assertSame('single', $episode['queue_mode']);
+
+        $next = $result['items'][3];
+        $this->assertSame('dir', $next['type']);
+        $this->assertSame('/?page=2', $next['path']);
+        $this->assertFalse($next['selectable']);
+        $this->assertArrayNotHasKey('queue_mode', $next);
+        $this->assertTrue($next['meta']['pagination']);
     }
 
     public function testResolveReturnsLink(): void
@@ -190,8 +225,7 @@ final class KraSkProviderTest extends TestCase
                 'response' => ['ident' => 'kra-1234'],
             ],
         ];
-
-        $provider = $this->providerWithFixtures($apiResponses, $scResponses);
+        $provider = $this->providerWithFixtures($apiResponses, $scResponses, ['ident_rate_limit_seconds' => 2]);
 
         $firstLink = $provider->resolveDownloadUrl('/Play/1234');
         $this->assertSame('https://cdn.kra.sk/download/alpha.mkv', $firstLink);
@@ -234,14 +268,87 @@ final class KraSkProviderTest extends TestCase
                     ],
                 ],
             ],
+            [
+                'url' => $scBase . '/Play/1131542?' . $defaultParams,
+                'response' => [
+                    'strms' => [
+                        [
+                            'provider' => 'kraska',
+                            'ident' => 'kra-1131542',
+                        ],
+                    ],
+                ],
+            ],
         ];
-
         $provider = $this->providerWithFixtures($apiResponses, $scResponses);
         $this->primeStreamCinemaToken($provider);
 
         $link = $provider->resolveDownloadUrl('1131542');
 
         $this->assertSame('https://cdn.kra.sk/download/kra-1131542.mkv', $link);
+    }
+
+    public function testResolveDownloadUrlDerivesIdentForNumericValue(): void
+    {
+        $apiCalls = [];
+        $self = $this;
+        $apiAdapter = function (string $endpoint, array $payload, bool $requireAuth, bool $attachSession, bool $mutateSession, ...$rest) use (&$apiCalls, $self) {
+            $apiCalls[] = ['endpoint' => $endpoint, 'payload' => $payload];
+            if ($endpoint === '/api/user/login') {
+                return ['session_id' => 'sess123'];
+            }
+
+            $self->assertSame('/api/file/download', $endpoint);
+            $self->assertSame('kra-1457729', $payload['data']['ident']);
+
+            return ['data' => ['link' => 'https://cdn.kra.sk/download/south-park-s01e01.mkv']];
+        };
+
+        $scBase = 'https://stream-cinema.online/kodi';
+        $defaultParams = 'DV=1&HDR=1&lang=en&skin=default&uid=test-uuid&ver=2.0';
+        $scFixtures = [
+            [
+                'url' => $scBase . '/Play/1457729?' . $defaultParams,
+                'response' => [
+                    'strms' => [
+                        [
+                            'provider' => 'kraska',
+                            'sid' => '1457729',
+                            'url' => '/ws2/a1SFWQLtgnTlItNoaZ8YCxomi4zkugAM/1457729',
+                        ],
+                    ],
+                ],
+            ],
+            [
+                'url' => $scBase . '/ws2/a1SFWQLtgnTlItNoaZ8YCxomi4zkugAM/1457729?' . $defaultParams,
+                'response' => ['ident' => 'kra-1457729'],
+            ],
+        ];
+
+        $scAdapter = function (string $url, bool $withAuth, $provider = null) use (&$scFixtures, $self) {
+            $fixture = array_shift($scFixtures);
+            $self->assertNotNull($fixture, 'Unexpected Stream-Cinema URL: ' . $url);
+            $self->assertSame($fixture['url'], $url);
+            return $fixture['response'];
+        };
+
+        $provider = new KraSkProvider([
+            'username' => 'u',
+            'password' => 'p',
+            'uuid' => 'test-uuid',
+            'debug' => true,
+        ], $apiAdapter, $scAdapter);
+        $this->primeStreamCinemaToken($provider);
+
+        $link = $provider->resolveDownloadUrl('1457729');
+
+        $this->assertSame('https://cdn.kra.sk/download/south-park-s01e01.mkv', $link);
+
+        $downloadCalls = array_filter(
+            $apiCalls,
+            static fn (array $call) => $call['endpoint'] === '/api/file/download'
+        );
+        $this->assertCount(1, $downloadCalls);
     }
 
     public function testIdentRateLimitDefaultsTo120Seconds(): void
@@ -332,7 +439,7 @@ final class KraSkProviderTest extends TestCase
             ],
         ];
 
-        $provider = $this->providerWithFixtures($apiResponses, $scResponses);
+    $provider = $this->providerWithFixtures($apiResponses, $scResponses);
         $this->primeStreamCinemaToken($provider);
 
         $variants = $provider->listDownloadOptions('/Play/123');
@@ -372,7 +479,7 @@ final class KraSkProviderTest extends TestCase
             ],
         ];
 
-        $provider = $this->providerWithFixtures($apiResponses, $scResponses);
+    $provider = $this->providerWithFixtures($apiResponses, $scResponses);
         $this->primeStreamCinemaToken($provider);
 
         $variants = $provider->listDownloadOptions('/Play/14264/1/1');

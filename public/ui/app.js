@@ -1040,21 +1040,42 @@ function renderKraskaMenu() {
 }
 
 function renderKraskaItem(item, index) {
-	if (item.type === 'dir' && item.path) {
+	if ((item.queueMode === 'branch' || item.type === 'dir') && item.path) {
 		const summary = item.summary ? `<p class="text-sm text-slate-400 line-clamp-2">${escapeHtml(item.summary)}</p>` : '';
+		const metaSection = renderKraskaMetaChips(item);
+		const checked = item.selectable && state.kraska.selected.has(item.cacheKey) ? 'checked' : '';
+		const checkbox = item.selectable
+			? `<input type="checkbox" class="mt-1 h-5 w-5 rounded border-slate-700 bg-slate-950 text-brand-500 focus:ring-brand-500/60" data-kraska-select="${escapeHtml(item.cacheKey)}" ${checked} />`
+			: '';
+		const queueHint = item.selectable
+			? '<span class="text-xs text-slate-400">Queue adds every item inside this folder.</span>'
+			: (item.meta?.pagination ? '<span class="text-xs text-slate-500">Opens the next page.</span>' : '');
+		const folderBadge = item.meta?.pagination ? 'Next page' : 'Directory';
+		const infoLink = `
+			<a href="#" data-kraska-open="${index}" class="block rounded-xl px-2 py-1 text-left transition hover:bg-slate-800/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/40">
+				<div class="flex flex-wrap items-center gap-2">
+					<h4 class="text-lg font-semibold text-slate-100">${escapeHtml(item.label ?? 'Untitled')}</h4>
+					<span class="rounded-full border border-slate-800/70 bg-slate-950/60 px-2 py-0.5 text-xs uppercase tracking-wide text-slate-300">${escapeHtml(folderBadge)}</span>
+				</div>
+				${summary}
+				${metaSection}
+			</a>
+		`;
 		return `
-			<li class="group rounded-2xl border border-slate-800/70 bg-slate-900/60 transition hover:border-brand-500/40">
-				<button type="button" data-kraska-open="${index}" class="flex w-full items-start gap-4 p-4 text-left">
-					<div class="flex h-10 w-10 items-center justify-center rounded-full bg-slate-800/60 text-brand-300">📁</div>
-					<div class="flex-1 space-y-1">
-						<div class="flex flex-wrap items-center gap-2">
-							<h4 class="text-lg font-semibold text-slate-100">${escapeHtml(item.label ?? 'Untitled')}</h4>
-							<span class="rounded-full border border-slate-800/70 bg-slate-950/60 px-2 py-0.5 text-xs uppercase tracking-wide text-slate-300">Directory</span>
+			<li class="group rounded-2xl border border-slate-800/70 bg-slate-900/60 p-4 transition hover:border-brand-500/40">
+				<div class="flex items-start gap-4">
+					${checkbox}
+					<div class="flex-1 space-y-3">
+						${infoLink}
+						<div class="flex flex-wrap items-center gap-3">
+							<button type="button" data-kraska-open="${index}" class="inline-flex items-center gap-2 rounded-lg border border-slate-700/60 bg-slate-950/60 px-3 py-1.5 text-xs font-semibold text-slate-200 transition hover:border-brand-400/60 hover:text-brand-200">
+								<span>Open</span>
+							</button>
+							${queueHint}
 						</div>
-						${summary}
 					</div>
-					<span class="text-xs text-slate-500">Open</span>
-				</button>
+					<div class="flex h-10 w-10 items-center justify-center rounded-full bg-slate-800/60 text-brand-300">📁</div>
+				</div>
 			</li>
 		`;
 	}
@@ -1091,7 +1112,7 @@ function renderKraskaItem(item, index) {
 
 function renderKraskaActionButtons(item, index) {
 	const buttons = [];
-	if (!item.selectable) {
+	if (!item.selectable || item.queueMode === 'branch') {
 		return buttons;
 	}
 	if (item.ident || item.path || (Array.isArray(item.meta?.variants) && item.meta.variants.length > 0)) {
@@ -1255,16 +1276,21 @@ function updateKraskaQueueButton() {
 
 async function queueSelectedKraska() {
 	if (state.isQueueSubmitting || state.kraska.selected.size === 0) return;
-	const itemsPayload = Array.from(state.kraska.selected)
+	const selections = Array.from(state.kraska.selected)
 		.map((cacheKey) => state.kraska.items.find((item) => item.cacheKey === cacheKey))
-		.filter((item) => item && item.ident)
-		.map((item) => ({
-			provider: item.provider ?? 'kraska',
-			external_id: item.ident,
-			title: item.label ?? item.summary ?? 'Untitled',
-		}));
+		.filter(Boolean);
 
-	if (itemsPayload.length === 0) {
+	const directEntries = [];
+	const branchEntries = [];
+	for (const entry of selections) {
+		if (entry.queueMode === 'branch' && entry.path) {
+			branchEntries.push(entry);
+		} else if (entry.ident) {
+			directEntries.push(entry);
+		}
+	}
+
+	if (directEntries.length === 0 && branchEntries.length === 0) {
 		showToast('Nothing to queue.', 'warning');
 		state.kraska.selected.clear();
 		updateKraskaQueueButton();
@@ -1272,22 +1298,66 @@ async function queueSelectedKraska() {
 	}
 
 	state.isQueueSubmitting = true;
-	els.kraskaQueueBtn?.setAttribute('disabled', 'true');
+	if (els.kraskaQueueBtn) {
+		els.kraskaQueueBtn.setAttribute('disabled', 'true');
+		els.kraskaQueueBtn.textContent = branchEntries.length > 0 ? 'Collecting…' : 'Queuing…';
+	}
 
 	try {
+		const queueMap = new Map();
+		const addQueueItem = (provider, externalId, title) => {
+			const key = `${provider}:${externalId}`;
+			if (!queueMap.has(key)) {
+				queueMap.set(key, {
+					provider,
+					external_id: externalId,
+					title: title && title.trim() !== '' ? title : `${provider.toUpperCase()} ${externalId}`,
+				});
+			}
+		};
+
+		for (const item of directEntries) {
+			const provider = item.provider ?? 'kraska';
+			const title = item.label ?? item.summary ?? 'Untitled';
+			addQueueItem(provider, item.ident, title);
+		}
+
+		for (const branch of branchEntries) {
+			const collected = await collectKraskaBranchItems(branch.path);
+			for (const item of collected) {
+				if (!item.ident) continue;
+				const provider = item.provider ?? 'kraska';
+				const title = item.label ?? item.summary ?? branch.label ?? 'Untitled';
+				addQueueItem(provider, item.ident, title);
+			}
+		}
+
+		const payloadItems = Array.from(queueMap.values());
+		if (payloadItems.length === 0) {
+			showToast('Nothing to queue.', 'warning');
+			state.kraska.selected.clear();
+			return;
+		}
+
+		if (els.kraskaQueueBtn) {
+			els.kraskaQueueBtn.textContent = `Queuing ${payloadItems.length}…`;
+		}
+
 		await fetchJson(API.queue, {
 			method: 'POST',
-			body: JSON.stringify({ items: itemsPayload }),
+			body: JSON.stringify({ items: payloadItems }),
 		});
-		showToast(`Queued ${itemsPayload.length} item${itemsPayload.length === 1 ? '' : 's'}.`, 'success');
+		showToast(`Queued ${payloadItems.length} item${payloadItems.length === 1 ? '' : 's'}.`, 'success');
 		state.kraska.selected.clear();
-		updateKraskaQueueButton();
 		loadJobs();
 	} catch (error) {
 		showToast(messageFromError(error), 'error');
 	} finally {
 		state.isQueueSubmitting = false;
-		els.kraskaQueueBtn?.removeAttribute('disabled');
+		if (els.kraskaQueueBtn) {
+			els.kraskaQueueBtn.removeAttribute('disabled');
+		}
+		updateKraskaQueueButton();
 	}
 }
 
@@ -1296,8 +1366,12 @@ function normalizeKraskaItems(items) {
 		const type = typeof item?.type === 'string' ? item.type.toLowerCase() : 'unknown';
 		const provider = typeof item?.provider === 'string' ? item.provider : 'kraska';
 		const ident = typeof item?.ident === 'string' ? item.ident : null;
-		const path = typeof item?.path === 'string' ? item.path : null;
-		const cacheKey = ident ? `${provider}:${ident}` : `${provider}:${type}:${index}`;
+		const pathRaw = typeof item?.path === 'string' ? item.path : null;
+		const path = pathRaw ? normalizeKraskaPath(pathRaw) : null;
+		const cacheKey = ident ? `${provider}:ident:${ident}` : (path ? `${provider}:path:${path}` : `${provider}:${type}:${index}`);
+		const queueModeRaw = typeof item?.queue_mode === 'string' ? item.queue_mode.toLowerCase() : null;
+		const queueMode = queueModeRaw === 'branch' ? 'branch' : (queueModeRaw === 'single' || ident ? 'single' : null);
+		const selectable = Boolean(item?.selectable ?? (queueMode !== null));
 		return {
 			...item,
 			type,
@@ -1307,9 +1381,50 @@ function normalizeKraskaItems(items) {
 			cacheKey,
 			meta: typeof item?.meta === 'object' && item.meta !== null ? item.meta : {},
 			art: typeof item?.art === 'object' && item.art !== null ? item.art : {},
-			selectable: Boolean(item?.selectable ?? ident),
+			selectable,
+			queueMode,
 		};
 	});
+}
+
+async function collectKraskaBranchItems(rootPath) {
+	const startPath = normalizeKraskaPath(rootPath);
+	const visited = new Set();
+	const stack = [startPath];
+	const collected = [];
+	const MAX_BRANCH_VISITS = 2000;
+
+	while (stack.length > 0) {
+		const current = stack.pop();
+		if (!current || visited.has(current)) {
+			continue;
+		}
+		visited.add(current);
+
+		let items = [];
+		if (normalizeKraskaPath(state.kraska.currentPath ?? '/') === current) {
+			items = state.kraska.items ?? [];
+		} else {
+			const params = new URLSearchParams({ path: current });
+			const response = await fetchJson(`${API.kraskaMenu}?${params.toString()}`);
+			const rawItems = Array.isArray(response?.data?.items) ? response.data.items : [];
+			items = normalizeKraskaItems(rawItems);
+		}
+
+		for (const entry of items) {
+			if (entry.queueMode === 'branch' && entry.path) {
+				stack.push(entry.path);
+			} else if (entry.ident) {
+				collected.push(entry);
+			}
+		}
+
+		if (visited.size > MAX_BRANCH_VISITS) {
+			throw new Error('Exceeded traversal limit while expanding selection.');
+		}
+	}
+
+	return collected;
 }
 
 async function openKraskaOptionsModal(item) {

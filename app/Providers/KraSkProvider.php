@@ -523,6 +523,27 @@ class KraSkProvider implements VideoProvider, StatusCapableProvider
             }
         }
 
+        if (is_string($ident) && $ident !== '' && $this->isLikelyNumericIdent($ident)) {
+            if ($debug) {
+                $this->debugLog('[DOWNLOAD] Numeric ident detected, attempting Stream-Cinema lookup prior to API call');
+            }
+            try {
+                $derivedIdent = $this->deriveIdentFromStreamCinema($externalIdOrUrl, $ident);
+                if (is_string($derivedIdent) && $derivedIdent !== '' && $derivedIdent !== $ident) {
+                    $ident = $derivedIdent;
+                    if ($debug) {
+                        $this->debugLog('[DOWNLOAD] Derived Kra.sk ident before API call: ' . $ident);
+                    }
+                }
+            } catch (RateLimitDeferredException $exception) {
+                throw $exception;
+            } catch (\Throwable $exception) {
+                if ($debug) {
+                    $this->debugLog('[DOWNLOAD] Pre-flight ident lookup failed: ' . $exception->getMessage());
+                }
+            }
+        }
+
         if ($debug) {
             $this->debugLog('[DOWNLOAD] Final ident before API call: ' . $ident);
         }
@@ -551,7 +572,7 @@ class KraSkProvider implements VideoProvider, StatusCapableProvider
                 }
 
                 $fallbackIdent = $this->recoverKraIdentAfterInvalidResponse($exception, $externalIdOrUrl, (string) $payload['data']['ident']);
-                if ($fallbackIdent === null || $fallbackIdent === $payload['data']['ident']) {
+                if (!is_string($fallbackIdent) || $fallbackIdent === '') {
                     throw $exception;
                 }
 
@@ -721,7 +742,10 @@ class KraSkProvider implements VideoProvider, StatusCapableProvider
     private function normalizeMenuEntry(array $entry): array
     {
         $typeRaw = strtolower(trim((string) ($entry['type'] ?? '')));
-        $type = $typeRaw !== '' ? $typeRaw : (isset($entry['strms']) ? 'video' : 'dir');
+        $baseType = $typeRaw !== '' ? $typeRaw : (isset($entry['strms']) ? 'video' : 'dir');
+        $type = $this->isPaginationType($baseType) ? 'dir' : $baseType;
+        $isPagination = $this->isPaginationType($baseType);
+
         $result = [
             'type' => $type,
             'label' => $this->deriveTitle($entry),
@@ -729,27 +753,45 @@ class KraSkProvider implements VideoProvider, StatusCapableProvider
         ];
 
         if ($this->isDirectoryType($type)) {
-            $dirUrl = $entry['url'] ?? ($entry['path'] ?? null);
-            if (is_string($dirUrl) && $dirUrl !== '') {
-                $result['path'] = $this->normalizeMenuPath($dirUrl);
+            $normalizedPath = $this->extractMenuEntryPath($entry);
+            if ($normalizedPath !== null) {
+                $result['path'] = $normalizedPath;
             }
-            $result['selectable'] = false;
+
+            $isQueueableBranch = isset($result['path']) && !$isPagination;
+            $result['selectable'] = $isQueueableBranch;
+            if ($isQueueableBranch) {
+                $result['queue_mode'] = 'branch';
+            }
         } elseif ($this->isPlayableType($type)) {
             $ident = $this->extractIdentFromMenuEntry($entry);
             if ($ident !== null) {
                 $result['ident'] = $ident;
                 $result['selectable'] = true;
+                $result['queue_mode'] = 'single';
             } else {
                 $result['selectable'] = false;
             }
         } else {
+            $path = $this->extractMenuEntryPath($entry);
+            if ($path !== null) {
+                $result['path'] = $path;
+            }
+
             $url = $entry['url'] ?? null;
             if (is_string($url) && str_starts_with($url, 'cmd://')) {
                 $result['command'] = $url;
-            } elseif (is_string($url) && $url !== '') {
-                $result['path'] = $this->normalizeMenuPath($url);
             }
-            $result['selectable'] = isset($result['ident']);
+
+            if (isset($result['ident'])) {
+                $result['selectable'] = true;
+                $result['queue_mode'] = 'single';
+            } elseif (isset($result['path'])) {
+                $result['selectable'] = true;
+                $result['queue_mode'] = 'branch';
+            } else {
+                $result['selectable'] = false;
+            }
         }
 
         $summary = $this->extractMenuPlot($entry);
@@ -758,6 +800,9 @@ class KraSkProvider implements VideoProvider, StatusCapableProvider
         }
 
         $meta = $this->extractMenuMeta($entry);
+        if ($isPagination) {
+            $meta['pagination'] = true;
+        }
         if ($meta !== []) {
             $result['meta'] = $meta;
         }
@@ -768,6 +813,35 @@ class KraSkProvider implements VideoProvider, StatusCapableProvider
         }
 
         return $result;
+    }
+
+    private function extractMenuEntryPath(array $entry): ?string
+    {
+        $candidates = [];
+        if (isset($entry['path'])) {
+            $candidates[] = $entry['path'];
+        }
+        if (isset($entry['url'])) {
+            $candidates[] = $entry['url'];
+        }
+
+        foreach ($candidates as $candidate) {
+            if (!is_string($candidate)) {
+                continue;
+            }
+
+            $value = trim($candidate);
+            if ($value === '' || str_starts_with(strtolower($value), 'cmd://')) {
+                continue;
+            }
+
+            $normalized = $this->normalizeMenuPath($value);
+            if ($normalized !== '') {
+                return $normalized;
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -978,23 +1052,27 @@ class KraSkProvider implements VideoProvider, StatusCapableProvider
             return null;
         }
 
+        $numericCandidate = null;
         $strms = $entry['strms'] ?? null;
         if (is_array($strms)) {
             foreach ($strms as $stream) {
                 if (!is_array($stream)) {
                     continue;
                 }
-                $provider = strtolower((string) ($stream['provider'] ?? ($stream['prov'] ?? '')));
-                if ($provider !== '' && !in_array($provider, ['kraska', 'kra.sk', 'krask', 'kra'], true)) {
+
+                $ident = $this->resolveKraStreamIdent($stream, attemptLookup: false, preferUrlOnNumeric: false);
+                if (!is_string($ident) || $ident === '') {
                     continue;
                 }
-                $ident = $stream['ident'] ?? $stream['sid'] ?? null;
-                if (is_string($ident) && $ident !== '') {
-                    return $ident;
+
+                if ($this->isLikelyNumericIdent($ident)) {
+                    if ($numericCandidate === null) {
+                        $numericCandidate = $ident;
+                    }
+                    continue;
                 }
-                if (isset($stream['url']) && is_string($stream['url']) && $stream['url'] !== '') {
-                    return $this->normalizeMenuPath($stream['url']);
-                }
+
+                return $ident;
             }
         }
 
@@ -1014,12 +1092,21 @@ class KraSkProvider implements VideoProvider, StatusCapableProvider
             return '/Play/' . (int) $id;
         }
 
+        if ($numericCandidate !== null) {
+            return $numericCandidate;
+        }
+
         return null;
     }
 
     private function isDirectoryType(string $type): bool
     {
         return in_array($type, ['dir', 'directory', 'folder', 'season', 'menu', 'context'], true);
+    }
+
+    private function isPaginationType(string $type): bool
+    {
+        return in_array($type, ['next', 'nextpage', 'page', 'previous', 'prev'], true);
     }
 
     private function isPlayableType(string $type): bool
@@ -1273,51 +1360,82 @@ class KraSkProvider implements VideoProvider, StatusCapableProvider
         $debug = ($this->config['debug'] ?? false) === true;
         
         $strms = $detail['strms'] ?? null;
-        if (!is_array($strms)) {
+        if (!is_array($strms) || $strms === []) {
             if ($debug) {
                 $this->debugLog('[EXTRACT_IDENT] No strms array in detail');
             }
             return null;
         }
-        
+
         if ($debug) {
             $this->debugLog('[EXTRACT_IDENT] Found strms array with ' . count($strms) . ' streams');
         }
-        
+
         $providerSynonyms = ['kraska','kra.sk','kra','krask'];
+        $numericFallback = null;
+
         foreach ($strms as $idx => $stream) {
             if (!is_array($stream)) {
                 continue;
             }
+
             $provider = $stream['provider'] ?? ($stream['prov'] ?? null);
             if ($debug) {
                 $this->debugLog('[EXTRACT_IDENT] Stream #' . $idx . ' provider: ' . var_export($provider, true));
             }
-            if (is_string($provider) && in_array(strtolower($provider), $providerSynonyms, true)) {
-                // Log all relevant fields to debug which one has the correct Kra.sk file identifier
-                if ($debug) {
-                    $this->debugLog('[EXTRACT_IDENT] Full Kra.sk stream fields:');
-                    $this->debugLog('  - ident: ' . var_export($stream['ident'] ?? null, true));
-                    $this->debugLog('  - id: ' . var_export($stream['id'] ?? null, true));
-                    $this->debugLog('  - sid: ' . var_export($stream['sid'] ?? null, true));
-                    $this->debugLog('  - file: ' . var_export($stream['file'] ?? null, true));
-                    $this->debugLog('  - uuid: ' . var_export($stream['uuid'] ?? null, true));
-                }
-                
-                // Try multiple fields in priority order: ident, sid, uuid, file, id
-                $ident = $stream['ident'] ?? ($stream['sid'] ?? ($stream['uuid'] ?? ($stream['file'] ?? ($stream['id'] ?? null))));
-                if ($debug) {
-                    $this->debugLog('[EXTRACT_IDENT] Selected ident value: ' . var_export($ident, true));
-                }
-                if (is_string($ident) && $ident !== '') {
-                    if ($debug) {
-                        $this->debugLog('[EXTRACT_IDENT] Returning ident: ' . $ident);
-                    }
-                    return $ident;
+            if (!is_string($provider) || !in_array(strtolower($provider), $providerSynonyms, true)) {
+                continue;
+            }
+
+            if ($debug) {
+                $this->debugLog('[EXTRACT_IDENT] Full Kra.sk stream fields:');
+                $this->debugLog('  - ident: ' . var_export($stream['ident'] ?? null, true));
+                $this->debugLog('  - id: ' . var_export($stream['id'] ?? null, true));
+                $this->debugLog('  - sid: ' . var_export($stream['sid'] ?? null, true));
+                $this->debugLog('  - file: ' . var_export($stream['file'] ?? null, true));
+                $this->debugLog('  - uuid: ' . var_export($stream['uuid'] ?? null, true));
+                if (isset($stream['url'])) {
+                    $this->debugLog('  - url: ' . var_export($stream['url'], true));
                 }
             }
+
+            $originalIdent = null;
+            $ident = $this->resolveKraStreamIdent($stream, attemptLookup: true, preferUrlOnNumeric: false, originalIdent: $originalIdent);
+
+            if ($debug) {
+                $this->debugLog('[EXTRACT_IDENT] Resolved ident candidate: ' . var_export($ident, true));
+                if ($originalIdent !== null && $originalIdent !== $ident) {
+                    $this->debugLog('[EXTRACT_IDENT] Lookup converted original ident ' . var_export($originalIdent, true) . ' to ' . var_export($ident, true));
+                }
+            }
+
+            if (!is_string($ident) || $ident === '') {
+                continue;
+            }
+
+            if ($this->isLikelyNumericIdent($ident)) {
+                if ($numericFallback === null) {
+                    $numericFallback = $ident;
+                }
+                if ($debug) {
+                    $this->debugLog('[EXTRACT_IDENT] Ident appears numeric, deferring as fallback');
+                }
+                continue;
+            }
+
+            if ($debug) {
+                $this->debugLog('[EXTRACT_IDENT] Returning ident: ' . $ident);
+            }
+            return $ident;
         }
-        
+
+        if ($numericFallback !== null) {
+            if ($debug) {
+                $this->debugLog('[EXTRACT_IDENT] Falling back to numeric ident: ' . $numericFallback);
+            }
+            return $numericFallback;
+        }
+
         if ($debug) {
             $this->debugLog('[EXTRACT_IDENT] No Kra.sk ident found in any stream');
         }
@@ -1385,6 +1503,101 @@ class KraSkProvider implements VideoProvider, StatusCapableProvider
     /**
      * @param array<string,mixed> $stream
      */
+    private function resolveKraStreamIdent(array $stream, bool $attemptLookup, bool $preferUrlOnNumeric, ?string &$originalIdent = null): ?string
+    {
+        $originalIdent = null;
+
+        $provider = $stream['provider'] ?? ($stream['prov'] ?? null);
+        if (!is_string($provider) || !in_array(strtolower($provider), ['kraska', 'kra.sk', 'kra', 'krask'], true)) {
+            return null;
+        }
+
+        $rawIdent = null;
+        foreach (['ident', 'sid', 'uuid', 'file', 'id'] as $field) {
+            if (!isset($stream[$field])) {
+                continue;
+            }
+            $value = $stream[$field];
+            if (!is_string($value)) {
+                continue;
+            }
+            $candidate = trim($value);
+            if ($candidate === '') {
+                continue;
+            }
+            $rawIdent = $candidate;
+            $originalIdent = $candidate;
+            break;
+        }
+
+        $url = $this->extractStreamUrl($stream);
+
+        if ($attemptLookup && $url !== null) {
+            $needsLookup = $rawIdent === null || $rawIdent === '' || $this->isLikelyNumericIdent($rawIdent);
+            if (!$needsLookup && isset($stream['sid']) && is_string($stream['sid'])) {
+                $needsLookup = $rawIdent === trim($stream['sid']);
+            }
+
+            if ($needsLookup) {
+                try {
+                    $lookup = $this->callStreamCinemaApi($url);
+                    $resolved = $lookup['ident'] ?? null;
+                    if (is_string($resolved)) {
+                        $resolvedTrim = trim($resolved);
+                        if ($resolvedTrim !== '') {
+                            return $resolvedTrim;
+                        }
+                    }
+                } catch (\Throwable $exception) {
+                    if (($this->config['debug'] ?? false) === true) {
+                        $this->debugLog('[IDENT] Unable to resolve via ' . $url . ': ' . $exception->getMessage());
+                    }
+                }
+            }
+        }
+
+        if ($rawIdent !== null && $rawIdent !== '') {
+            if ($preferUrlOnNumeric && $url !== null && $this->isLikelyNumericIdent($rawIdent)) {
+                return $url;
+            }
+
+            return $rawIdent;
+        }
+
+        return $url;
+    }
+
+    /**
+     * @param array<string,mixed> $stream
+     */
+    private function extractStreamUrl(array $stream): ?string
+    {
+        $url = $stream['url'] ?? null;
+        if (!is_string($url)) {
+            return null;
+        }
+
+        $trimmed = trim($url);
+        if ($trimmed === '') {
+            return null;
+        }
+
+        if (str_starts_with(strtolower($trimmed), 'cmd://')) {
+            return null;
+        }
+
+        $normalized = $this->normalizeMenuPath($trimmed);
+        return $normalized !== '' ? $normalized : null;
+    }
+
+    private function isLikelyNumericIdent(string $value): bool
+    {
+        return preg_match('/^\d+$/', $value) === 1;
+    }
+
+    /**
+     * @param array<string,mixed> $stream
+     */
     private function normalizeStreamVariant(array $stream, int $index): ?array
     {
         $provider = $stream['provider'] ?? ($stream['prov'] ?? null);
@@ -1392,34 +1605,15 @@ class KraSkProvider implements VideoProvider, StatusCapableProvider
             return null;
         }
 
-        $ident = $stream['ident']
-            ?? ($stream['sid'] ?? ($stream['uuid'] ?? ($stream['file'] ?? ($stream['id'] ?? null))));
-
-        $originalIdent = $ident;
-        $shouldAttemptLookup = isset($stream['url']) && is_string($stream['url']) && $stream['url'] !== '';
-        if ($shouldAttemptLookup) {
-            $needsLookup = !is_string($ident) || $ident === '' || preg_match('/^\d+$/', (string) $ident) === 1;
-            if (!$needsLookup && isset($stream['sid']) && $ident === $stream['sid']) {
-                $needsLookup = true;
-            }
-
-            if ($needsLookup) {
-                try {
-                    $lookup = $this->callStreamCinemaApi($stream['url']);
-                    $resolved = $lookup['ident'] ?? null;
-                    if (is_string($resolved) && $resolved !== '') {
-                        $ident = $resolved;
-                    }
-                } catch (\Throwable $exception) {
-                    if (($this->config['debug'] ?? false) === true) {
-                        $this->debugLog('[OPTIONS] Unable to resolve ident via ' . $stream['url'] . ': ' . $exception->getMessage());
-                    }
-                }
-            }
-        }
+        $originalIdent = null;
+        $ident = $this->resolveKraStreamIdent($stream, attemptLookup: true, preferUrlOnNumeric: false, originalIdent: $originalIdent);
 
         if (!is_string($ident) || $ident === '') {
             return null;
+        }
+
+        if (($this->config['debug'] ?? false) === true && $originalIdent !== null && $originalIdent !== $ident) {
+            $this->debugLog('[OPTIONS] Resolved stream ident from ' . $originalIdent . ' to ' . $ident);
         }
 
         $name = $stream['label'] ?? $stream['title'] ?? $stream['name'] ?? $stream['quality'] ?? null;
@@ -1947,7 +2141,11 @@ class KraSkProvider implements VideoProvider, StatusCapableProvider
 
         $val = (int) $raw;
 
-        return $val > 0 ? $val : 120;
+        if ($val <= 0) {
+            return 0;
+        }
+
+        return $val;
     }
 
     /**
