@@ -212,6 +212,41 @@ final class KraSkProviderTest extends TestCase
         $this->assertSame(45, $this->extractIdentRateLimit($provider));
     }
 
+    public function testSanitizePayloadForLoggingMasksSensitiveValues(): void
+    {
+        $provider = new KraSkProvider();
+        $ref = new ReflectionClass($provider);
+        $method = $ref->getMethod('sanitizePayloadForLogging');
+        $method->setAccessible(true);
+
+        $payload = [
+            'session_id' => 'abc123',
+            'data' => [
+                'ident' => 'kra-987',
+                'password' => 'secret',
+                'token' => 'tok',
+                'nested' => [
+                    'session_id' => 'inner',
+                ],
+            ],
+            'password' => 'outer-secret',
+            'token' => 'outer-token',
+            'ident' => 'kra-987',
+        ];
+
+        /** @var array<string,mixed> $sanitized */
+        $sanitized = $method->invoke($provider, $payload);
+
+        $this->assertSame('***', $sanitized['session_id']);
+        $this->assertSame('***', $sanitized['password']);
+        $this->assertSame('***', $sanitized['token']);
+        $this->assertSame('kra-987', $sanitized['ident']);
+        $this->assertSame('***', $sanitized['data']['password']);
+        $this->assertSame('***', $sanitized['data']['token']);
+        $this->assertSame('kra-987', $sanitized['data']['ident']);
+        $this->assertSame('***', $sanitized['data']['nested']['session_id']);
+    }
+
     private function extractIdentRateLimit(KraSkProvider $provider): int
     {
         $ref = new ReflectionClass($provider);

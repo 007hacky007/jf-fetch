@@ -10,6 +10,8 @@ use App\Infra\ProviderSecrets;
 use App\Providers\VideoProvider;
 use App\Providers\WebshareProvider;
 use App\Providers\RateLimitDeferredException;
+use App\Providers\KraSkApiException;
+use App\Providers\KraSkProvider;
 use App\Support\Clock;
 
 /**
@@ -121,7 +123,10 @@ function runSchedulerLoop(string $root): void
 			$providerId = (int) $job['provider_id'];
 			$providerRow = fetchProvider($providerId);
 			if ($providerRow === null || (int) $providerRow['enabled'] !== 1) {
-				failJob((int) $job['id'], 'Provider disabled or missing.', $job);
+				failJob((int) $job['id'], 'Provider disabled or missing.', $job, [
+					'provider_id' => $providerId,
+					'job_external_id' => $job['external_id'] ?? null,
+				]);
 				continue;
 			}
 
@@ -244,7 +249,32 @@ function processJob(array $job, array $providerRow, Aria2Client $aria2): void
 	} catch (RateLimitDeferredException $exception) {
 		throw $exception;
 	} catch (Throwable $exception) {
-		failJob((int) $job['id'], 'Failed to enqueue job: ' . $exception->getMessage(), $job);
+		$details = [
+			'exception_class' => $exception::class,
+			'job_external_id' => $job['external_id'] ?? null,
+			'provider_id' => (int) ($job['provider_id'] ?? 0),
+			'provider_key' => $providerRow['key'] ?? null,
+		];
+
+		if ($provider instanceof KraSkProvider) {
+			$details['provider'] = 'kraska';
+
+			if ($exception instanceof KraSkApiException) {
+				$details['request'] = [
+					'url' => $exception->getUrl(),
+					'endpoint' => $exception->getEndpoint(),
+					'status_code' => $exception->getStatusCode(),
+					'payload' => $exception->getPayload(),
+				];
+
+				$responsePreview = $exception->getResponseBody();
+				if (is_string($responsePreview) && $responsePreview !== '') {
+					$details['response_preview'] = substr($responsePreview, 0, 500);
+				}
+			}
+		}
+
+		failJob((int) $job['id'], 'Failed to enqueue job: ' . $exception->getMessage(), $job, $details);
 	}
 }
 
@@ -382,7 +412,7 @@ function buildProvider(array $providerRow): VideoProvider
 /**
  * Marks a job as failed with the provided error message.
  */
-function failJob(int $jobId, string $message, ?array $job = null): void
+function failJob(int $jobId, string $message, ?array $job = null, array $details = []): void
 {
 	Db::run(
 		"UPDATE jobs SET status = 'failed', error_text = :error, updated_at = :updated_at WHERE id = :id",
@@ -398,10 +428,16 @@ function failJob(int $jobId, string $message, ?array $job = null): void
 	}
 
 	if (is_array($job)) {
-		Audit::record((int) $job['user_id'], 'job.failed', 'job', $jobId, [
+		$payload = [
 			'title' => $job['title'] ?? null,
 			'error' => $message,
-		]);
+		];
+
+		if ($details !== []) {
+			$payload['details'] = $details;
+		}
+
+		Audit::record((int) $job['user_id'], 'job.failed', 'job', $jobId, $payload);
 	}
 
 	logError(sprintf('Job %d failed: %s', $jobId, $message));

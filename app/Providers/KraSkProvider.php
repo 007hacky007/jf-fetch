@@ -1384,7 +1384,14 @@ class KraSkProvider implements VideoProvider, StatusCapableProvider
             throw new RuntimeException('Kra.sk HTTP error: ' . $err);
         }
         if ($code < 200 || $code >= 300) {
-            throw new RuntimeException('Kra.sk API HTTP status ' . $code);
+            $responseSnippet = is_string($raw) ? substr($raw, 0, 1000) : null;
+            throw new KraSkApiException(
+                $code,
+                $endpoint,
+                $this->sanitizePayloadForLogging($payload),
+                $url,
+                $responseSnippet
+            );
         }
 
         try {
@@ -1416,6 +1423,32 @@ class KraSkProvider implements VideoProvider, StatusCapableProvider
         }
 
         return $decoded;
+    }
+
+    /**
+     * @param array<string,mixed> $payload
+     * @return array<string,mixed>
+     */
+    private function sanitizePayloadForLogging(array $payload): array
+    {
+        $sensitiveKeys = ['password', 'session_id', 'token', 'authorization', 'auth_token'];
+        $sanitized = [];
+
+        foreach ($payload as $key => $value) {
+            if (is_array($value)) {
+                $sanitized[$key] = $this->sanitizePayloadForLogging($value);
+                continue;
+            }
+
+            if (is_string($key) && in_array($key, $sensitiveKeys, true) && (is_scalar($value) || $value === null)) {
+                $sanitized[$key] = '***';
+                continue;
+            }
+
+            $sanitized[$key] = $value;
+        }
+
+        return $sanitized;
     }
 
     private function debugLog(string $line): void
