@@ -1,7 +1,5 @@
 /vendor/
-/storage/app.sqlite
-/storage/logs/*.log
-/storage/nginx.pid
+/storage/
 /.idea/
 /.vscode/
 /.phpunit.cache
