@@ -15,7 +15,7 @@ use Throwable;
  */
 final class KraskaMenuCache
 {
-    public const DEFAULT_TTL_SECONDS = 600;
+    public const DEFAULT_TTL_SECONDS = 604800;
 
     private const TABLE_NAME = 'kraska_menu_cache';
 

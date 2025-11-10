@@ -90,6 +90,9 @@ function buildSettingsResponse(): array
 			'api_key' => (string) Config::get('jellyfin.api_key'),
 			'library_id' => (string) Config::get('jellyfin.library_id'),
 		],
+		'providers' => [
+			'kraska_menu_cache_ttl_seconds' => (int) Config::get('providers.kraska_menu_cache_ttl_seconds'),
+		],
 	];
 }
 
@@ -105,6 +108,7 @@ function validateSettingsPayload(array $payload): array
 		'app.max_active_downloads' => ['section' => 'app', 'field' => 'max_active_downloads', 'type' => 'int', 'min' => 0],
 		'app.min_free_space_gb' => ['section' => 'app', 'field' => 'min_free_space_gb', 'type' => 'float', 'min' => 0],
 		'app.default_search_limit' => ['section' => 'app', 'field' => 'default_search_limit', 'type' => 'int', 'min' => 1, 'max' => 100],
+		'providers.kraska_menu_cache_ttl_seconds' => ['section' => 'providers', 'field' => 'kraska_menu_cache_ttl_seconds', 'type' => 'int', 'min' => 0, 'max' => 31536000],
 		'paths.downloads' => ['section' => 'paths', 'field' => 'downloads', 'type' => 'string', 'required' => true],
 		'paths.library' => ['section' => 'paths', 'field' => 'library', 'type' => 'string', 'required' => true],
 		'jellyfin.url' => ['section' => 'jellyfin', 'field' => 'url', 'type' => 'string', 'required' => false],
@@ -169,6 +173,18 @@ function validateSettingsPayload(array $payload): array
 				$value = filter_var($rawValue, FILTER_VALIDATE_INT, ['options' => ['min_range' => $min]]);
 				if ($value === false || (int) $value > $max) {
 					$errors[$key] = sprintf('Default search limit must be an integer between %d and %d.', $min, $max);
+					break;
+				}
+
+				$normalized[$key] = (int) $value;
+				break;
+
+			case 'providers.kraska_menu_cache_ttl_seconds':
+				$min = (int) ($definition['min'] ?? 0);
+				$max = (int) ($definition['max'] ?? PHP_INT_MAX);
+				$value = filter_var($rawValue, FILTER_VALIDATE_INT, ['options' => ['min_range' => $min]]);
+				if ($value === false || (int) $value > $max) {
+					$errors[$key] = sprintf('Kra.sk menu cache TTL must be between %d and %d seconds.', $min, $max);
 					break;
 				}
 

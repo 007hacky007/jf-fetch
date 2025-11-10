@@ -413,6 +413,11 @@ async function saveSettings() {
 	const parsedMinFreeSpace = Number.parseFloat(minFreeSpaceInput);
 	const minFreeSpace = Number.isNaN(parsedMinFreeSpace) ? null : parsedMinFreeSpace;
 
+	const kraskaTtlInput = els.settingsKraskaMenuCacheTtl?.value ?? '';
+	const parsedKraskaTtl = Number.parseFloat(kraskaTtlInput);
+	const kraskaTtlDays = Number.isNaN(parsedKraskaTtl) ? null : Math.max(parsedKraskaTtl, 0);
+	const kraskaTtlSeconds = kraskaTtlDays === null ? null : Math.round(kraskaTtlDays * 86400);
+
 	const payload = {
 		app: {
 			base_url: (els.settingsBaseUrl?.value ?? '').trim(),
@@ -428,6 +433,9 @@ async function saveSettings() {
 			url: (els.settingsJellyfinUrl?.value ?? '').trim(),
 			api_key: (els.settingsJellyfinApiKey?.value ?? '').trim(),
 			library_id: (els.settingsJellyfinLibraryId?.value ?? '').trim(),
+		},
+		providers: {
+			kraska_menu_cache_ttl_seconds: kraskaTtlSeconds,
 		},
 	};
 
@@ -484,6 +492,7 @@ function renderSettings() {
 		els.settingsMaxDownloads,
 		els.settingsMinFreeSpace,
 		els.settingsDefaultSearchLimit,
+		els.settingsKraskaMenuCacheTtl,
 		els.settingsDownloadsPath,
 		els.settingsLibraryPath,
 		els.settingsJellyfinUrl,
@@ -516,6 +525,16 @@ function renderSettings() {
 		if (els.settingsDefaultSearchLimit) {
 			const dsl = settings?.app?.default_search_limit;
 			els.settingsDefaultSearchLimit.value = dsl === null || dsl === undefined ? '' : String(dsl);
+		}
+		if (els.settingsKraskaMenuCacheTtl) {
+			const ttlSeconds = settings?.providers?.kraska_menu_cache_ttl_seconds;
+			if (ttlSeconds === null || ttlSeconds === undefined) {
+				els.settingsKraskaMenuCacheTtl.value = '';
+			} else {
+				const ttlDays = ttlSeconds / 86400;
+				const rounded = Math.round(ttlDays * 10) / 10;
+				els.settingsKraskaMenuCacheTtl.value = Number.isFinite(rounded) ? String(rounded) : '';
+			}
 		}
 		if (els.settingsDownloadsPath) {
 			els.settingsDownloadsPath.value = settings?.paths?.downloads ?? '';

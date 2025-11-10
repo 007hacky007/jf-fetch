@@ -353,7 +353,7 @@ function attemptRestartLostTransfer(array $job, Aria2Client $aria2): bool
 
 	$downloadDir = (string) Config::get('paths.downloads');
 	try {
-		ensureDirectory($downloadDir);
+		workerEnsureDirectory($downloadDir);
 	} catch (Throwable $exception) {
 		logError(sprintf('Job %d restart failed: unable to prepare download directory (%s).', (int) $job['id'], $exception->getMessage()));
 		return false;
@@ -463,7 +463,7 @@ function removePartialFiles(array $job): void
 	}
 }
 
-function ensureDirectory(string $path): void
+function workerEnsureDirectory(string $path): void
 {
 	if ($path === '') {
 		return;

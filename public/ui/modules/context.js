@@ -112,6 +112,7 @@ export const els = {
 	settingsMaxDownloads: document.getElementById('settings-max-downloads'),
 	settingsMinFreeSpace: document.getElementById('settings-min-free-space'),
 	settingsDefaultSearchLimit: document.getElementById('settings-default-search-limit'),
+	settingsKraskaMenuCacheTtl: document.getElementById('settings-kraska-menu-cache-ttl'),
 	settingsDownloadsPath: document.getElementById('settings-downloads-path'),
 	settingsLibraryPath: document.getElementById('settings-library-path'),
 	settingsJellyfinUrl: document.getElementById('settings-jellyfin-url'),

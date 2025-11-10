@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use App\Infra\Auth;
+use App\Infra\Config;
 use App\Infra\Db;
 use App\Infra\Http;
 use App\Infra\KraskaMenuCache;
@@ -27,7 +28,10 @@ if ($path === '') {
     $path = '/';
 }
 $forceRefresh = wantsForceRefresh($_GET['refresh'] ?? null);
-$ttlSeconds = KraskaMenuCache::DEFAULT_TTL_SECONDS;
+$ttlSeconds = (int) Config::get('providers.kraska_menu_cache_ttl_seconds');
+if ($ttlSeconds < 0) {
+    $ttlSeconds = KraskaMenuCache::DEFAULT_TTL_SECONDS;
+}
 
 try {
     $providerRow = fetchKraSkProvider();
