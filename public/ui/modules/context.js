@@ -42,6 +42,11 @@ export const state = {
 		loading: false,
 		error: null,
 		cache: null,
+		selectedItem: null,
+		variants: [],
+		variantsLoading: false,
+		variantsError: null,
+		variantQueueing: false,
 	},
 };
 
@@ -143,6 +148,7 @@ export const API = {
 	providersStatusAll: '/api/providers/status_all',
 	search: '/api/search',
 	kraskaMenu: '/api/providers/kraska/menu',
+	kraskaOptions: '/api/providers/kraska/options',
 	queue: '/api/jobs/queue',
 	jobsList: '/api/jobs/list',
 	jobCancel: '/api/jobs/cancel',

@@ -355,6 +355,61 @@ class KraSkProvider implements VideoProvider, StatusCapableProvider
     }
 
     /**
+     * Return all Kra.sk download variants associated with a menu entry.
+     * Mirrors Kodi's behaviour of presenting multiple quality/codec options when available.
+     *
+     * @return array<int,array<string,mixed>>
+     */
+    public function listDownloadOptions(string $externalIdOrUrl): array
+    {
+        $value = trim($externalIdOrUrl);
+        if ($value === '') {
+            return [];
+        }
+
+        if (str_starts_with($value, 'http://') || str_starts_with($value, 'https://')) {
+            return [$this->buildFallbackVariant($value, null)];
+        }
+
+        $detail = null;
+        $path = null;
+
+        if (str_starts_with($value, '/')) {
+            $path = $this->normalizeMenuPath($value);
+        } elseif (preg_match('#^Play/\d+$#i', $value) === 1) {
+            $path = $this->normalizeMenuPath('/' . $value);
+        } elseif (preg_match('#^\d+$#', $value) === 1) {
+            $path = $this->normalizeMenuPath('/Play/' . $value);
+        }
+
+        if ($path !== null) {
+            try {
+                $detail = $this->fetchStreamCinemaItem($path);
+            } catch (RateLimitDeferredException $exception) {
+                throw $exception;
+            } catch (\Throwable $exception) {
+                if (($this->config['debug'] ?? false) === true) {
+                    $this->debugLog('[OPTIONS] Failed to fetch detail for ' . $path . ': ' . $exception->getMessage());
+                }
+            }
+        }
+
+        if (is_array($detail)) {
+            $variants = $this->extractKraStreamVariants($detail);
+            if ($variants !== []) {
+                return $variants;
+            }
+
+            $fallbackIdent = $this->extractKraIdentFromDetail($detail);
+            if (is_string($fallbackIdent) && $fallbackIdent !== '') {
+                return [$this->buildFallbackVariant($fallbackIdent, $detail)];
+            }
+        }
+
+        return [$this->buildFallbackVariant($value, $detail)];
+    }
+
+    /**
      * Resolve a download URL from a file ident.
      * Kra.sk endpoint: POST /api/file/download { data: { ident: <id> } }
      * Returns { data: { link: "https://..." } }
@@ -473,20 +528,47 @@ class KraSkProvider implements VideoProvider, StatusCapableProvider
         }
 
         $payload = [ 'data' => [ 'ident' => $ident ] ];
-        if ($debug) {
-            $this->debugLog('[DOWNLOAD] Payload before apiPost: ' . json_encode($payload));
-        }
-        
-        try {
-            $response = $this->apiPost('/api/file/download', $payload, requireAuth: true);
+        $attempt = 0;
+
+        while (true) {
             if ($debug) {
-                $this->debugLog('[DOWNLOAD] API response keys: ' . implode(', ', array_keys($response)));
+                $this->debugLog('[DOWNLOAD] Attempt ' . ($attempt + 1) . ' with ident: ' . $payload['data']['ident']);
             }
-        } catch (\Throwable $e) {
-            if ($debug) {
-                $this->debugLog('[DOWNLOAD] API request failed: ' . $e->getMessage());
+
+            try {
+                $response = $this->apiPost('/api/file/download', $payload, requireAuth: true);
+                if ($debug) {
+                    $this->debugLog('[DOWNLOAD] API response keys: ' . implode(', ', array_keys($response)));
+                }
+                break;
+            } catch (KraSkApiException $exception) {
+                if ($debug) {
+                    $this->debugLog('[DOWNLOAD] API returned KraSkApiException: ' . $exception->getMessage());
+                }
+
+                if ($attempt >= 1) {
+                    throw $exception;
+                }
+
+                $fallbackIdent = $this->recoverKraIdentAfterInvalidResponse($exception, $externalIdOrUrl, (string) $payload['data']['ident']);
+                if ($fallbackIdent === null || $fallbackIdent === $payload['data']['ident']) {
+                    throw $exception;
+                }
+
+                $attempt++;
+                $payload['data']['ident'] = $fallbackIdent;
+
+                if ($debug) {
+                    $this->debugLog('[DOWNLOAD] Retrying with fallback ident: ' . $fallbackIdent);
+                }
+
+                continue;
+            } catch (\Throwable $e) {
+                if ($debug) {
+                    $this->debugLog('[DOWNLOAD] API request failed: ' . $e->getMessage());
+                }
+                throw $e;
             }
-            throw $e;
         }
         
         $data = $response['data'] ?? null;
@@ -1267,6 +1349,354 @@ class KraSkProvider implements VideoProvider, StatusCapableProvider
     }
 
     /**
+     * @param array<string,mixed> $detail
+     * @return array<int,array<string,mixed>>
+     */
+    private function extractKraStreamVariants(array $detail): array
+    {
+        $strms = $detail['strms'] ?? null;
+        if (!is_array($strms)) {
+            return [];
+        }
+
+        $variants = [];
+        $seen = [];
+        foreach (array_values($strms) as $index => $stream) {
+            if (!is_array($stream)) {
+                continue;
+            }
+            $variant = $this->normalizeStreamVariant($stream, $index);
+            if ($variant === null) {
+                continue;
+            }
+            $variantId = $variant['id'] ?? null;
+            if (is_string($variantId) && $variantId !== '') {
+                if (isset($seen[$variantId])) {
+                    continue;
+                }
+                $seen[$variantId] = true;
+            }
+            $variants[] = $variant;
+        }
+
+        return $variants;
+    }
+
+    /**
+     * @param array<string,mixed> $stream
+     */
+    private function normalizeStreamVariant(array $stream, int $index): ?array
+    {
+        $provider = $stream['provider'] ?? ($stream['prov'] ?? null);
+        if (is_string($provider) && !in_array(strtolower($provider), ['kraska', 'kra.sk', 'kra', 'krask'], true)) {
+            return null;
+        }
+
+        $ident = $stream['ident']
+            ?? ($stream['sid'] ?? ($stream['uuid'] ?? ($stream['file'] ?? ($stream['id'] ?? null))));
+
+        $originalIdent = $ident;
+        $shouldAttemptLookup = isset($stream['url']) && is_string($stream['url']) && $stream['url'] !== '';
+        if ($shouldAttemptLookup) {
+            $needsLookup = !is_string($ident) || $ident === '' || preg_match('/^\d+$/', (string) $ident) === 1;
+            if (!$needsLookup && isset($stream['sid']) && $ident === $stream['sid']) {
+                $needsLookup = true;
+            }
+
+            if ($needsLookup) {
+                try {
+                    $lookup = $this->callStreamCinemaApi($stream['url']);
+                    $resolved = $lookup['ident'] ?? null;
+                    if (is_string($resolved) && $resolved !== '') {
+                        $ident = $resolved;
+                    }
+                } catch (\Throwable $exception) {
+                    if (($this->config['debug'] ?? false) === true) {
+                        $this->debugLog('[OPTIONS] Unable to resolve ident via ' . $stream['url'] . ': ' . $exception->getMessage());
+                    }
+                }
+            }
+        }
+
+        if (!is_string($ident) || $ident === '') {
+            return null;
+        }
+
+        $name = $stream['label'] ?? $stream['title'] ?? $stream['name'] ?? $stream['quality'] ?? null;
+        if (!is_string($name) || $name === '') {
+            $name = 'Option ' . ($index + 1);
+        }
+
+        $size = null;
+        foreach (['size', 'filesize'] as $sizeKey) {
+            if (isset($stream[$sizeKey]) && is_numeric($stream[$sizeKey])) {
+                $size = (int) $stream[$sizeKey];
+                break;
+            }
+        }
+
+        $bitrate = null;
+        if (isset($stream['bitrate']) && is_numeric($stream['bitrate'])) {
+            $bitrate = (int) $stream['bitrate'];
+        }
+
+        $language = null;
+        if (isset($stream['langs']) && is_array($stream['langs']) && $stream['langs'] !== []) {
+            $language = implode(',', array_keys($stream['langs']));
+        } elseif (isset($stream['lang']) && is_string($stream['lang']) && $stream['lang'] !== '') {
+            $language = $stream['lang'];
+        }
+
+        $videoMeta = [];
+        if (isset($stream['video']) && is_array($stream['video'])) {
+            $videoMeta = $stream['video'];
+        } elseif (isset($stream['stream_info']['video']) && is_array($stream['stream_info']['video'])) {
+            $videoMeta = $stream['stream_info']['video'];
+        }
+
+        $audioMeta = [];
+        if (isset($stream['audio']) && is_array($stream['audio'])) {
+            $audioMeta = $stream['audio'];
+        } elseif (isset($stream['stream_info']['audio']) && is_array($stream['stream_info']['audio'])) {
+            $audioMeta = $stream['stream_info']['audio'];
+        }
+
+        $duration = null;
+        if (isset($stream['duration']) && is_numeric($stream['duration'])) {
+            $duration = (int) $stream['duration'];
+        } elseif (isset($stream['info']['duration']) && is_numeric($stream['info']['duration'])) {
+            $duration = (int) $stream['info']['duration'];
+        } elseif (isset($videoMeta['duration']) && is_numeric($videoMeta['duration'])) {
+            $duration = (int) $videoMeta['duration'];
+        }
+
+        $sourceEntry = $stream;
+        $sourceEntry['kra_ident'] = $ident;
+        if ($originalIdent !== null && $originalIdent !== $ident) {
+            $sourceEntry['original_ident'] = $originalIdent;
+        }
+
+        $file = [
+            'ident' => $ident,
+            'name' => $name,
+            'size' => $size ?? 0,
+            'quality' => $stream['quality'] ?? null,
+            'language' => $language,
+            'bitrate' => $bitrate,
+            'source_entry' => $sourceEntry,
+            'kra_ident' => $ident,
+        ];
+
+        if ($duration !== null) {
+            $file['duration'] = $duration;
+        }
+
+        if (isset($videoMeta['codec']) && is_string($videoMeta['codec'])) {
+            $file['video_codec'] = $videoMeta['codec'];
+        }
+        if (isset($videoMeta['width']) && is_numeric($videoMeta['width'])) {
+            $file['width'] = (int) $videoMeta['width'];
+        }
+        if (isset($videoMeta['height']) && is_numeric($videoMeta['height'])) {
+            $file['height'] = (int) $videoMeta['height'];
+            if (!isset($file['quality']) || $file['quality'] === null) {
+                $codecPart = isset($videoMeta['codec']) && is_string($videoMeta['codec']) && $videoMeta['codec'] !== ''
+                    ? ' ' . strtoupper($videoMeta['codec'])
+                    : '';
+                $file['quality'] = $videoMeta['height'] . 'p' . $codecPart;
+            }
+        }
+        if (isset($videoMeta['fps'])) {
+            $file['fps'] = $videoMeta['fps'];
+        } elseif (isset($stream['fps'])) {
+            $file['fps'] = $stream['fps'];
+        }
+        if (isset($videoMeta['aspect'])) {
+            $file['aspect'] = $videoMeta['aspect'];
+        } elseif (isset($videoMeta['ratio'])) {
+            $file['aspect'] = $videoMeta['ratio'];
+        }
+
+        if (isset($audioMeta['codec']) && is_string($audioMeta['codec'])) {
+            $file['audio_codec'] = $audioMeta['codec'];
+        }
+        if (isset($audioMeta['channels']) && is_numeric($audioMeta['channels'])) {
+            $file['audio_channels'] = (int) $audioMeta['channels'];
+        }
+
+        if (!isset($file['kra_ident'])) {
+            $file['kra_ident'] = $stream['ident'] ?? $stream['sid'] ?? null;
+        }
+
+        if (($file['size'] ?? 0) === 0 && $duration !== null && $duration > 0 && $bitrate !== null && $bitrate > 0) {
+            $file['size'] = (int) (($bitrate * $duration * 1000) / 8);
+        }
+
+        return $this->normalizeFile($file);
+    }
+
+    /**
+     * @param array<string,mixed>|null $detail
+     * @return array<string,mixed>
+     */
+    private function buildFallbackVariant(string $ident, ?array $detail): array
+    {
+        $title = null;
+        if (is_array($detail)) {
+            if (isset($detail['label']) && is_string($detail['label']) && $detail['label'] !== '') {
+                $title = $this->cleanMarkup((string) $detail['label']);
+            } elseif (isset($detail['title']) && is_string($detail['title']) && $detail['title'] !== '') {
+                $title = $this->cleanMarkup((string) $detail['title']);
+            }
+        }
+
+        if ($title === null || $title === '') {
+            $title = 'Download ' . $ident;
+        }
+
+        $file = [
+            'ident' => $ident,
+            'name' => $title,
+            'size' => 0,
+            'quality' => null,
+            'language' => null,
+            'bitrate' => null,
+            'source_entry' => [
+                'fallback' => true,
+                'ident' => $ident,
+                'detail' => $detail,
+            ],
+        ];
+
+        $file['kra_ident'] = $ident;
+
+        return $this->normalizeFile($file);
+    }
+
+    private function recoverKraIdentAfterInvalidResponse(KraSkApiException $exception, string $originalValue, string $currentIdent): ?string
+    {
+        if ($exception->getStatusCode() !== 400) {
+            return null;
+        }
+
+        $responseBody = $exception->getResponseBody();
+        $shouldRetry = false;
+        if (is_string($responseBody) && $responseBody !== '') {
+            $decoded = json_decode($responseBody, true);
+            if (is_array($decoded)) {
+                $errorCode = $decoded['error'] ?? null;
+                if (is_numeric($errorCode) && (int) $errorCode === 1207) {
+                    $shouldRetry = true;
+                }
+                $message = $decoded['msg'] ?? ($decoded['message'] ?? null);
+                if (!$shouldRetry && is_string($message) && stripos($message, 'invalid ident') !== false) {
+                    $shouldRetry = true;
+                }
+            } elseif (stripos($responseBody, 'invalid ident') !== false) {
+                $shouldRetry = true;
+            }
+        }
+
+        if (!$shouldRetry) {
+            return null;
+        }
+
+        return $this->deriveIdentFromStreamCinema($originalValue, $currentIdent);
+    }
+
+    private function deriveIdentFromStreamCinema(string $originalValue, string $currentIdent): ?string
+    {
+        $candidates = [];
+
+        if (preg_match('#^/Play/\d+$#i', $originalValue) === 1) {
+            $candidates[] = $this->normalizeMenuPath($originalValue);
+        } elseif (preg_match('#^\d+$#', $originalValue) === 1) {
+            $candidates[] = '/Play/' . $originalValue;
+        } elseif (preg_match('#^https?://#i', $originalValue) === 1) {
+            $normalized = $this->normalizeMenuPath($originalValue);
+            if ($normalized !== '') {
+                $candidates[] = $normalized;
+            }
+        }
+
+        if (preg_match('#^\d+$#', $currentIdent) === 1) {
+            $fallbackPath = '/Play/' . $currentIdent;
+            if (!in_array($fallbackPath, $candidates, true)) {
+                $candidates[] = $fallbackPath;
+            }
+        }
+
+        $candidates = array_values(array_unique($candidates));
+        if ($candidates === []) {
+            return null;
+        }
+
+        foreach ($candidates as $path) {
+            try {
+                $detail = $this->fetchStreamCinemaItem($path);
+            } catch (RateLimitDeferredException $exception) {
+                throw $exception;
+            } catch (\Throwable $exception) {
+                if (($this->config['debug'] ?? false) === true) {
+                    $this->debugLog('[FALLBACK] Failed to fetch detail for ' . $path . ': ' . $exception->getMessage());
+                }
+                continue;
+            }
+
+            $ident = $this->extractKraIdentFromDetail($detail);
+            if (is_string($ident) && $ident !== '') {
+                if (($this->config['debug'] ?? false) === true) {
+                    $this->debugLog('[FALLBACK] extractKraIdentFromDetail returned ' . $ident . ' for ' . $path);
+                }
+                return $ident;
+            }
+
+            $strms = $detail['strms'] ?? null;
+            if (!is_array($strms)) {
+                continue;
+            }
+
+            foreach ($strms as $stream) {
+                if (!is_array($stream)) {
+                    continue;
+                }
+
+                $provider = $stream['provider'] ?? ($stream['prov'] ?? null);
+                if (!is_string($provider) || !in_array(strtolower($provider), ['kraska', 'kra.sk', 'kra', 'krask'], true)) {
+                    continue;
+                }
+
+                $directIdent = $stream['ident'] ?? ($stream['sid'] ?? null);
+                if (is_string($directIdent) && $directIdent !== '') {
+                    if (($this->config['debug'] ?? false) === true) {
+                        $this->debugLog('[FALLBACK] Using stream ident ' . $directIdent . ' from ' . $path);
+                    }
+                    return $directIdent;
+                }
+
+                if (isset($stream['url']) && is_string($stream['url']) && $stream['url'] !== '') {
+                    try {
+                        $lookup = $this->callStreamCinemaApi($stream['url']);
+                        $resolved = $lookup['ident'] ?? null;
+                        if (is_string($resolved) && $resolved !== '') {
+                            if (($this->config['debug'] ?? false) === true) {
+                                $this->debugLog('[FALLBACK] Resolved ident ' . $resolved . ' via stream URL ' . $stream['url']);
+                            }
+                            return $resolved;
+                        }
+                    } catch (\Throwable $exception) {
+                        if (($this->config['debug'] ?? false) === true) {
+                            $this->debugLog('[FALLBACK] Failed to resolve via ' . $stream['url'] . ': ' . $exception->getMessage());
+                        }
+                    }
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
      * Derive a human friendly title from a Stream-Cinema search entry.
      * Strips BBCode-like tags (e.g. [B]..[/B]).
      */
@@ -1415,11 +1845,36 @@ class KraSkProvider implements VideoProvider, StatusCapableProvider
 
         // Kra.sk often encodes errors inside 'error' or 'msg'
         if (isset($decoded['error'])) {
-            // if auth error, reset session
             if ($requireAuth) {
                 $this->sessionId = null;
             }
-            throw new RuntimeException('Kra.sk API error: ' . (is_string($decoded['error']) ? $decoded['error'] : 'unknown'));
+
+            $errorCode = $decoded['error'];
+            $message = null;
+
+            if (isset($decoded['msg']) && is_string($decoded['msg']) && $decoded['msg'] !== '') {
+                $message = $decoded['msg'];
+            } elseif (isset($decoded['message']) && is_string($decoded['message']) && $decoded['message'] !== '') {
+                $message = $decoded['message'];
+            }
+
+            if (is_numeric($errorCode)) {
+                $errorCode = (int) $errorCode;
+            }
+
+            $messageParts = [];
+            if (is_numeric($errorCode)) {
+                $messageParts[] = 'Code ' . $errorCode;
+            }
+            if ($message !== null) {
+                $messageParts[] = $message;
+            }
+
+            $errorDescription = $messageParts !== []
+                ? implode(': ', $messageParts)
+                : (is_string($errorCode) ? $errorCode : 'unknown');
+
+            throw new RuntimeException('Kra.sk API error: ' . $errorDescription);
         }
 
         return $decoded;

@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use PHPUnit\Framework\TestCase;
+use App\Providers\KraSkApiException;
 use App\Providers\KraSkProvider;
 use App\Providers\RateLimitDeferredException;
 
@@ -17,6 +18,9 @@ final class KraSkProviderTest extends TestCase
             $apiIdx++;
             if ($fixture === null || $fixture['endpoint'] !== $endpoint) {
                 throw new RuntimeException('Unexpected endpoint ' . $endpoint);
+            }
+            if (array_key_exists('exception', $fixture)) {
+                throw $fixture['exception'];
             }
             return $fixture['response'];
         };
@@ -200,6 +204,46 @@ final class KraSkProviderTest extends TestCase
         }
     }
 
+    public function testResolveDownloadUrlRecoversFromInvalidIdent(): void
+    {
+        $invalid = new KraSkApiException(
+            400,
+            '/api/file/download',
+            ['data' => ['ident' => '1131542']],
+            'https://api.kra.sk/api/file/download',
+            '{"error":1207,"msg":"invalid ident"}'
+        );
+
+        $apiResponses = [
+            ['endpoint' => '/api/user/login', 'response' => ['session_id' => 'sess123']],
+            ['endpoint' => '/api/file/download', 'exception' => $invalid],
+            ['endpoint' => '/api/file/download', 'response' => ['data' => ['link' => 'https://cdn.kra.sk/download/kra-1131542.mkv']]],
+        ];
+
+        $scBase = 'https://stream-cinema.online/kodi';
+        $defaultParams = 'DV=1&HDR=1&lang=en&skin=default&uid=test-uuid&ver=2.0';
+        $scResponses = [
+            [
+                'url' => $scBase . '/Play/1131542?' . $defaultParams,
+                'response' => [
+                    'strms' => [
+                        [
+                            'provider' => 'kraska',
+                            'ident' => 'kra-1131542',
+                        ],
+                    ],
+                ],
+            ],
+        ];
+
+        $provider = $this->providerWithFixtures($apiResponses, $scResponses);
+        $this->primeStreamCinemaToken($provider);
+
+        $link = $provider->resolveDownloadUrl('1131542');
+
+        $this->assertSame('https://cdn.kra.sk/download/kra-1131542.mkv', $link);
+    }
+
     public function testIdentRateLimitDefaultsTo120Seconds(): void
     {
         $provider = new KraSkProvider();
@@ -245,6 +289,106 @@ final class KraSkProviderTest extends TestCase
         $this->assertSame('***', $sanitized['data']['token']);
         $this->assertSame('kra-987', $sanitized['data']['ident']);
         $this->assertSame('***', $sanitized['data']['nested']['session_id']);
+    }
+
+    public function testListDownloadOptionsReturnsStreamVariants(): void
+    {
+        $apiResponses = [
+            ['endpoint' => '/api/user/login', 'response' => ['session_id' => 'sess123']],
+        ];
+
+        $scBase = 'https://stream-cinema.online/kodi';
+        $defaultParams = 'DV=1&HDR=1&lang=en&skin=default&uid=test-uuid&ver=2.0';
+        $scResponses = [
+            [
+                'url' => $scBase . '/Play/123?' . $defaultParams,
+                'response' => [
+                    'strms' => [
+                        [
+                            'provider' => 'kraska',
+                            'ident' => 'kra-123',
+                            'quality' => '1080p',
+                            'size' => 2_000_000_000,
+                            'stream_info' => [
+                                'video' => ['codec' => 'h265', 'height' => 1080, 'duration' => 5400],
+                                'audio' => ['codec' => 'dts', 'channels' => 6],
+                            ],
+                            'langs' => ['CZ' => 1],
+                        ],
+                        [
+                            'provider' => 'kraska',
+                            'sid' => 'kra-456',
+                            'quality' => '720p',
+                            'url' => '/ws2/token/xyz',
+                            'size' => 1_500_000_000,
+                            'langs' => ['EN' => 1],
+                        ],
+                    ],
+                ],
+            ],
+            [
+                'url' => $scBase . '/ws2/token/xyz?' . $defaultParams,
+                'response' => ['ident' => 'kra-456'],
+            ],
+        ];
+
+        $provider = $this->providerWithFixtures($apiResponses, $scResponses);
+        $this->primeStreamCinemaToken($provider);
+
+        $variants = $provider->listDownloadOptions('/Play/123');
+
+        $this->assertCount(2, $variants);
+        $this->assertSame('kra-123', $variants[0]['id']);
+        $this->assertSame('1080p', $variants[0]['quality']);
+        $this->assertSame('kra-456', $variants[1]['id']);
+        $this->assertSame('720p', $variants[1]['quality']);
+    }
+
+    public function testListDownloadOptionsResolvesNumericSidToKraIdent(): void
+    {
+        $apiResponses = [
+            ['endpoint' => '/api/user/login', 'response' => ['session_id' => 'sess123']],
+        ];
+
+        $scBase = 'https://stream-cinema.online/kodi';
+        $defaultParams = 'DV=1&HDR=1&lang=en&skin=default&uid=test-uuid&ver=2.0';
+        $scResponses = [
+            [
+                'url' => $scBase . '/Play/14264/1/1?' . $defaultParams,
+                'response' => [
+                    'strms' => [
+                        [
+                            'provider' => 'kraska',
+                            'sid' => '1131542',
+                            'url' => '/ws2/token/family-guy/1131542',
+                            'quality' => '1080p',
+                        ],
+                    ],
+                ],
+            ],
+            [
+                'url' => $scBase . '/ws2/token/family-guy/1131542?' . $defaultParams,
+                'response' => ['ident' => 'kra-1131542'],
+            ],
+        ];
+
+        $provider = $this->providerWithFixtures($apiResponses, $scResponses);
+        $this->primeStreamCinemaToken($provider);
+
+        $variants = $provider->listDownloadOptions('/Play/14264/1/1');
+
+        $this->assertCount(1, $variants);
+        $this->assertSame('kra-1131542', $variants[0]['id']);
+        $this->assertSame('kra-1131542', $variants[0]['kra_ident']);
+    }
+
+    public function testListDownloadOptionsFallsBackToProvidedIdent(): void
+    {
+        $provider = new KraSkProvider();
+        $variants = $provider->listDownloadOptions('kra-999');
+
+        $this->assertCount(1, $variants);
+        $this->assertSame('kra-999', $variants[0]['id']);
     }
 
     private function extractIdentRateLimit(KraSkProvider $provider): int

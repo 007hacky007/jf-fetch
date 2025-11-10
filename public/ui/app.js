@@ -206,6 +206,18 @@ function wireKraska() {
 	els.kraskaList?.addEventListener('click', (event) => {
 		const target = event.target;
 		if (!(target instanceof HTMLElement)) return;
+		const optionsTrigger = target.closest('[data-kraska-options]');
+		if (optionsTrigger instanceof HTMLElement) {
+			const index = Number.parseInt(optionsTrigger.dataset.kraskaOptions ?? '', 10);
+			if (Number.isFinite(index)) {
+				const item = state.kraska.items[index];
+				if (item) {
+					event.preventDefault();
+					openKraskaOptionsModal(item);
+				}
+			}
+			return;
+		}
 		const trigger = target.closest('[data-kraska-open]');
 		if (!(trigger instanceof HTMLElement)) return;
 		const index = Number.parseInt(trigger.dataset.kraskaOpen ?? '', 10);
@@ -619,6 +631,11 @@ function resetState() {
 	state.kraska.loading = false;
 	state.kraska.error = null;
 	state.kraska.cache = null;
+	state.kraska.selectedItem = null;
+	state.kraska.variants = [];
+	state.kraska.variantsLoading = false;
+	state.kraska.variantsError = null;
+	state.kraska.variantQueueing = false;
 	applyDefaultSearchLimit(true);
 	renderProviders();
 	renderSearchResults();
@@ -929,6 +946,10 @@ function renderKraskaItem(item, index) {
 	const checked = state.kraska.selected.has(item.cacheKey) ? 'checked' : '';
 	const summary = item.summary ? `<p class="text-sm text-slate-400 line-clamp-2">${escapeHtml(item.summary)}</p>` : '';
 	const metaSection = renderKraskaMetaChips(item);
+	const actionButtons = renderKraskaActionButtons(item, index);
+	const actionsMarkup = actionButtons.length > 0
+		? `<div class="flex flex-wrap gap-2">${actionButtons.join('')}</div>`
+		: '';
 	const thumb = item.art?.thumb ?? item.art?.poster ?? item.art?.fanart ?? null;
 	const thumbnail = thumb ? `<img src="${escapeHtml(thumb)}" alt="${escapeHtml(item.label ?? 'Artwork')}" class="h-16 w-16 rounded-lg object-cover" loading="lazy" />` : '';
 
@@ -944,11 +965,27 @@ function renderKraskaItem(item, index) {
 					</div>
 					${summary}
 					${metaSection}
+					${actionsMarkup}
 				</div>
 				${thumbnail}
 			</div>
 		</li>
 	`;
+}
+
+function renderKraskaActionButtons(item, index) {
+	const buttons = [];
+	if (!item.selectable) {
+		return buttons;
+	}
+	if (item.ident || item.path || (Array.isArray(item.meta?.variants) && item.meta.variants.length > 0)) {
+		buttons.push(`
+			<button type="button" data-kraska-options="${index}" class="inline-flex items-center gap-2 rounded-lg border border-slate-700/60 bg-slate-950/60 px-3 py-1.5 text-xs font-semibold text-slate-200 transition hover:border-brand-400/60 hover:text-brand-100">
+				<span>Download options</span>
+			</button>
+		`);
+	}
+	return buttons;
 }
 
 function formatKraskaCacheAge(meta) {
@@ -1157,6 +1194,279 @@ function normalizeKraskaItems(items) {
 			selectable: Boolean(item?.selectable ?? ident),
 		};
 	});
+}
+
+async function openKraskaOptionsModal(item) {
+	if (!state.user) {
+		showToast('Please sign in first.', 'warning');
+		return;
+	}
+	if (!els.modal) return;
+	const preferredPath = typeof item?.path === 'string' && item.path !== '' ? normalizeKraskaPath(item.path) : null;
+	const preferredIdent = typeof item?.ident === 'string' && item.ident !== '' ? item.ident : null;
+	const externalId = preferredPath ?? preferredIdent;
+	if (!externalId) {
+		showToast('This entry does not expose downloadable variants.', 'warning');
+		return;
+	}
+
+	state.kraska.selectedItem = {
+		label: item?.label ?? item?.title ?? 'Untitled',
+		ident: preferredIdent,
+		path: preferredPath,
+		provider: item?.provider ?? 'kraska',
+		externalId,
+		kra_ident: typeof item?.kra_ident === 'string' && item.kra_ident !== '' ? item.kra_ident : null,
+	};
+	if (item && typeof item === 'object' && item !== null) {
+		['cacheKey', 'contextType', 'sourceItem', 'searchIndex', 'kra_ident'].forEach((key) => {
+			if (key in item) {
+				state.kraska.selectedItem[key] = item[key];
+			}
+		});
+	}
+	state.kraska.variants = [];
+	state.kraska.variantsLoading = true;
+	state.kraska.variantsError = null;
+	state.kraska.variantQueueing = false;
+
+	renderKraskaOptionsModal();
+	els.modal.showModal();
+	els.modal.addEventListener(
+		'close',
+		() => {
+			state.kraska.selectedItem = null;
+			state.kraska.variants = [];
+			state.kraska.variantsError = null;
+			state.kraska.variantsLoading = false;
+			state.kraska.variantQueueing = false;
+		},
+		{ once: true }
+	);
+
+	try {
+		const params = new URLSearchParams({ external_id: externalId });
+		const response = await fetchJson(`${API.kraskaOptions}?${params.toString()}`);
+		const variants = normalizeKraskaVariants(response?.data ?? []);
+		state.kraska.variants = variants;
+		state.kraska.variantsLoading = false;
+		if (variants.length === 0) {
+			state.kraska.variantsError = 'No download options available for this entry.';
+		}
+	} catch (error) {
+		state.kraska.variantsLoading = false;
+		state.kraska.variantsError = messageFromError(error);
+	} finally {
+		renderKraskaOptionsModal();
+	}
+}
+
+function renderKraskaOptionsModal() {
+	if (!els.modal) return;
+	const context = state.kraska.selectedItem;
+	if (!context) return;
+	const title = context.label ?? 'Download options';
+	const variants = state.kraska.variants ?? [];
+	const loading = Boolean(state.kraska.variantsLoading);
+	const error = state.kraska.variantsError ?? null;
+
+	let bodyContent = '';
+	if (loading) {
+		bodyContent = '<div class="text-sm text-brand-300">Loading download options…</div>';
+	} else if (error) {
+		bodyContent = `<div class="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">${escapeHtml(error)}</div>`;
+	} else if (variants.length === 0) {
+		bodyContent = '<div class="text-sm text-slate-400">No download variants were returned for this item.</div>';
+	} else {
+		bodyContent = `
+			<ul class="space-y-3">
+				${variants.map((variant, index) => renderKraskaVariantOption(variant, index)).join('')}
+			</ul>
+		`;
+	}
+
+	els.modal.innerHTML = `
+		<div>
+			<header>
+				<h3 class="text-lg font-semibold text-slate-100">Download options</h3>
+				<p class="mt-1 text-sm text-slate-400">${escapeHtml(title)}</p>
+			</header>
+			<div class="modal-body space-y-4">
+				${bodyContent}
+			</div>
+			<footer>
+				<button type="button" data-close class="rounded-lg border border-slate-700/60 bg-slate-950/60 px-4 py-2 text-sm text-slate-200">Close</button>
+			</footer>
+		</div>
+	`;
+
+	const closeBtn = els.modal.querySelector('[data-close]');
+	closeBtn?.addEventListener('click', () => {
+		els.modal.close();
+	});
+
+	els.modal.querySelectorAll('[data-kraska-queue-variant]').forEach((button) => {
+		if (!(button instanceof HTMLButtonElement)) return;
+		button.addEventListener('click', () => {
+			const index = Number.parseInt(button.dataset.kraskaQueueVariant ?? '', 10);
+			if (Number.isFinite(index)) {
+				queueKraskaVariant(index, button);
+			}
+		});
+	});
+}
+
+function renderKraskaVariantOption(variant, index) {
+	const chips = buildKraskaVariantChips(variant);
+	const description = variant.description ?? null;
+	const summary = description ? `<p class="text-xs text-slate-400">${escapeHtml(description)}</p>` : '';
+	const queueLabel = state.kraska.variantQueueing ? 'Queuing…' : 'Queue this option';
+	const disabledAttr = state.kraska.variantQueueing ? 'disabled' : '';
+
+	return `
+		<li class="rounded-2xl border border-slate-800/70 bg-slate-900/60 p-4">
+			<div class="flex flex-col gap-3">
+				<div class="flex flex-wrap items-center justify-between gap-3">
+					<div>
+						<h4 class="text-base font-semibold text-slate-100">${escapeHtml(variant.title ?? `Option ${index + 1}`)}</h4>
+						${summary}
+					</div>
+					<button type="button" data-kraska-queue-variant="${index}" class="rounded-lg bg-brand-500 px-3 py-1.5 text-xs font-semibold text-white shadow transition hover:bg-brand-400 focus:outline-none focus:ring focus:ring-brand-500/40 disabled:cursor-not-allowed disabled:opacity-60" ${disabledAttr}>${escapeHtml(queueLabel)}</button>
+				</div>
+				${chips}
+			</div>
+		</li>
+	`;
+}
+
+function buildKraskaVariantChips(variant) {
+	const chips = [];
+	if (variant.quality) chips.push(String(variant.quality));
+	if (variant.size_human) chips.push(String(variant.size_human));
+	if (variant.language) chips.push(String(variant.language));
+	const durationSeconds = Number(variant.duration_seconds ?? 0);
+	if (Number.isFinite(durationSeconds) && durationSeconds > 0) {
+		chips.push(formatDuration(durationSeconds));
+	}
+	const bitrateLabel = formatBitrate(variant.bitrate_kbps);
+	if (bitrateLabel) chips.push(bitrateLabel);
+	if (variant.video_codec) chips.push(String(variant.video_codec));
+	if (variant.audio_codec) chips.push(String(variant.audio_codec));
+	if (variant.audio_channels) {
+		const audioChannels = formatAudioChannels(variant.audio_channels);
+		if (audioChannels) chips.push(audioChannels);
+	}
+	if (variant.fps) chips.push(`${variant.fps} fps`);
+
+	if (chips.length === 0) {
+		return '';
+	}
+
+	return `
+		<div class="flex flex-wrap gap-2 text-xs text-slate-300">
+			${chips
+				.map((chip) => `<span class="rounded-full border border-slate-800/60 bg-slate-900/40 px-2 py-0.5">${escapeHtml(String(chip))}</span>`)
+				.join('')}
+		</div>
+	`;
+}
+
+function normalizeKraskaVariants(variants) {
+	return variants.map((variant, index) => {
+		const idRaw = variant?.id ?? variant?.ident ?? variant?.external_id ?? index;
+		const id = typeof idRaw === 'string' ? idRaw : String(idRaw);
+		const title = typeof variant?.title === 'string' && variant.title !== ''
+			? variant.title
+			: `Option ${index + 1}`;
+		const duration = Number(variant?.duration_seconds ?? variant?.duration ?? null);
+		const bitrate = Number(variant?.bitrate_kbps ?? variant?.bitrate ?? null);
+		const sizeBytes = Number(variant?.size_bytes ?? variant?.size ?? null);
+		const audioChannels = Number(variant?.audio_channels ?? null);
+
+		return {
+			id,
+			kra_ident: typeof variant?.kra_ident === 'string' && variant.kra_ident !== ''
+				? variant.kra_ident
+				: typeof variant?.source?.kra_ident === 'string' && variant.source.kra_ident !== ''
+					? variant.source.kra_ident
+					: null,
+			title,
+			quality: variant?.quality ?? null,
+			language: variant?.language ?? null,
+			size_bytes: Number.isFinite(sizeBytes) && sizeBytes > 0 ? sizeBytes : null,
+			size_human: typeof variant?.size_human === 'string' ? variant.size_human : (Number.isFinite(sizeBytes) && sizeBytes > 0 ? formatRelativeSize(sizeBytes) : null),
+			bitrate_kbps: Number.isFinite(bitrate) && bitrate > 0 ? bitrate : null,
+			duration_seconds: Number.isFinite(duration) && duration > 0 ? duration : null,
+			video_codec: variant?.video_codec ?? variant?.source?.video_codec ?? null,
+			audio_codec: variant?.audio_codec ?? variant?.source?.audio_codec ?? null,
+			audio_channels: Number.isFinite(audioChannels) && audioChannels > 0 ? audioChannels : null,
+			fps: variant?.fps ?? null,
+			description: typeof variant?.description === 'string' ? variant.description : null,
+			source: variant?.source ?? null,
+		};
+	});
+}
+
+async function queueKraskaVariant(index, button) {
+	if (state.kraska.variantQueueing) return;
+	const variant = state.kraska.variants[index];
+	const context = state.kraska.selectedItem;
+	if (!variant || !context) return;
+	const targetIdent = typeof variant.kra_ident === 'string' && variant.kra_ident !== ''
+		? variant.kra_ident
+		: typeof variant.id === 'string' && variant.id !== ''
+			? variant.id
+			: context.externalId;
+	if (!targetIdent) {
+		showToast('Missing ident for selected option.', 'error');
+		return;
+	}
+
+	state.kraska.variantQueueing = true;
+	if (button instanceof HTMLButtonElement) {
+		button.setAttribute('disabled', 'true');
+		button.textContent = 'Queuing…';
+	}
+
+	const titleParts = [context.label ?? 'Kra.sk item'];
+	if (variant.title) {
+		titleParts.push(variant.title);
+	} else if (variant.quality) {
+		titleParts.push(variant.quality);
+	}
+	const jobTitle = titleParts.filter(Boolean).join(' • ');
+
+	try {
+		await fetchJson(API.queue, {
+			method: 'POST',
+			body: JSON.stringify({
+				items: [
+					{
+						provider: 'kraska',
+						external_id: targetIdent,
+						title: jobTitle,
+					},
+				],
+			}),
+		});
+		showToast('Download queued.', 'success');
+		if (context?.contextType === 'search' && context.cacheKey) {
+			state.selectedSearch.delete(context.cacheKey);
+			renderSearchResults();
+		}
+		els.modal?.close();
+		state.kraska.selectedItem = null;
+		state.kraska.variants = [];
+		state.kraska.variantQueueing = false;
+		loadJobs();
+	} catch (error) {
+		showToast(messageFromError(error), 'error');
+		state.kraska.variantQueueing = false;
+		if (button instanceof HTMLButtonElement) {
+			button.removeAttribute('disabled');
+			button.textContent = 'Queue this option';
+		}
+	}
 }
 
 function normalizeKraskaPath(value) {
@@ -1667,7 +1977,12 @@ function renderSearchResults() {
 
 	toggleElement(els.searchEmpty, false);
 	const items = state.searchResults
-		.map((item) => {
+		.map((item, index) => {
+			const providerKey = String(item.provider ?? '').toLowerCase();
+			const isKraska = providerKey === 'kraska';
+			const optionsMarkup = isKraska
+				? `<div class="pt-2"><button type="button" data-search-kraska-options="${index}" class="inline-flex items-center gap-1 rounded-lg bg-brand-500 px-3 py-1.5 text-xs font-semibold text-white shadow transition hover:bg-brand-400 focus:outline-none focus:ring focus:ring-brand-500/40">Choose stream</button></div>`
+				: '';
 			const checked = state.selectedSearch.has(item.cacheKey) ? 'checked' : '';
 			const resolution = item.resolution ?? (item.video_width && item.video_height ? `${item.video_width}x${item.video_height}` : null);
 			const fpsLabel = formatFps(item.video_fps);
@@ -1704,6 +2019,7 @@ function renderSearchResults() {
 							<div class="text-xs text-slate-500">External ID: ${escapeHtml(item.external_id)}</div>
 							${videoMarkup}
 							${audioMarkup}
+							${optionsMarkup}
 						</div>
 						${item.thumbnail ? `<img src="${escapeHtml(item.thumbnail)}" alt="${escapeHtml(item.title)}" class="h-16 w-16 rounded-lg object-cover" loading="lazy" />` : ''}
 					</div>
@@ -1715,6 +2031,30 @@ function renderSearchResults() {
 	els.searchResults.innerHTML = items;
 	els.searchResults.querySelectorAll('input[type="checkbox"]').forEach((input) => {
 		input.addEventListener('change', handleResultSelectionChange);
+	});
+	els.searchResults.querySelectorAll('[data-search-kraska-options]').forEach((button) => {
+		if (!(button instanceof HTMLButtonElement)) return;
+		button.addEventListener('click', () => {
+			const index = Number.parseInt(button.dataset.searchKraskaOptions ?? '', 10);
+			if (Number.isNaN(index)) return;
+			const entry = state.searchResults[index];
+			if (!entry) return;
+			const normalizedPath = typeof entry.path === 'string' && entry.path !== '' ? entry.path : null;
+			const inferredPath = typeof entry.kraska_path === 'string' && entry.kraska_path !== '' ? entry.kraska_path : normalizedPath;
+			const preferredPath = typeof inferredPath === 'string' && inferredPath !== '' ? normalizeKraskaPath(inferredPath) : null;
+			const fallbackIdent = typeof entry.kra_ident === 'string' && entry.kra_ident !== '' ? entry.kra_ident : null;
+			openKraskaOptionsModal({
+				label: entry.title,
+				ident: fallbackIdent ?? (typeof entry.external_id === 'string' && !entry.external_id.startsWith('/') ? entry.external_id : null),
+				path: preferredPath ?? (typeof entry.external_id === 'string' && entry.external_id.startsWith('/') ? entry.external_id : null),
+				provider: entry.provider,
+				cacheKey: entry.cacheKey,
+				contextType: 'search',
+				sourceItem: entry,
+				searchIndex: index,
+				kra_ident: fallbackIdent ?? null,
+			});
+		});
 	});
 	updateQueueButton();
 }
@@ -2305,7 +2645,13 @@ function showFormError(message) {
 
 function normalizeSearchResults(items) {
 	return items.map((item) => {
-		const externalId = item.id ?? item.external_id ?? item.ident ?? crypto.randomUUID();
+		const externalId = typeof item?.id === 'string' && item.id !== ''
+			? item.id
+			: typeof item?.external_id === 'string' && item.external_id !== ''
+				? item.external_id
+				: typeof item?.ident === 'string' && item.ident !== ''
+					? item.ident
+					: crypto.randomUUID();
 		const cacheKey = `${item.provider ?? 'unknown'}:${externalId}`;
 		const videoWidth = item.video_width ?? item.width ?? null;
 		const videoHeight = item.video_height ?? item.height ?? null;
@@ -2313,6 +2659,14 @@ function normalizeSearchResults(items) {
 		const audioChannels = item.audio_channels ?? null;
 		const audioLanguage = item.audio_language ?? item.language ?? null;
 		const bitrateKbps = item.bitrate_kbps ?? (item.bitrate ? Number(item.bitrate) / 1000 : null);
+		const sourceEntry = item?.source?.source_entry ?? null;
+		const rawPath = typeof item?.path === 'string' && item.path !== ''
+			? item.path
+			: (typeof sourceEntry?.url === 'string' && sourceEntry.url !== '' ? sourceEntry.url : null);
+		const normalizedPath = typeof rawPath === 'string' && rawPath !== '' ? normalizeKraskaPath(rawPath) : null;
+		const kraIdent = typeof item?.kra_ident === 'string' && item.kra_ident !== ''
+			? item.kra_ident
+			: (typeof item?.source?.kra_ident === 'string' && item.source.kra_ident !== '' ? item.source.kra_ident : null);
 		return {
 			external_id: externalId,
 			provider: item.provider ?? 'unknown',
@@ -2329,6 +2683,11 @@ function normalizeSearchResults(items) {
 			audio_channels: audioChannels,
 			audio_language: audioLanguage,
 			bitrate_kbps: bitrateKbps,
+			kra_ident: kraIdent,
+			path: normalizedPath,
+			kraska_path: normalizedPath,
+			source: item?.source ?? null,
+			source_entry: sourceEntry,
 			cacheKey,
 		};
 	});
