@@ -44,6 +44,9 @@ class KraSkProvider implements VideoProvider, StatusCapableProvider
     private ?string $scToken = null; // Stream-Cinema auth token (X-AUTH-TOKEN)
     private ?string $scUuid = null;  // Stable UUID per instance
     private ?int $lastScTokenTs = null;
+    /** @var array<int,string> */
+    private array $scFetchQueue = []; // queued Stream-Cinema detail paths waiting for rate limit<br/>
+    private ?int $lastIdentFetchTs = null; // timestamp of last successful fetchStreamCinemaItem real request
 
     /**
      * @param array<string,mixed> $config Expected keys: username, password
@@ -386,6 +389,8 @@ class KraSkProvider implements VideoProvider, StatusCapableProvider
                             $this->debugLog('[DOWNLOAD] No Kra.sk stream found in strms, falling back to SC ID: ' . $ident);
                         }
                     }
+                } catch (RateLimitDeferredException $e) {
+                    throw $e;
                 } catch (\Throwable $e) {
                     // Fallback to numeric ID
                     $ident = $scId;
@@ -411,6 +416,8 @@ class KraSkProvider implements VideoProvider, StatusCapableProvider
                             $this->debugLog('[DOWNLOAD] No Kra.sk ident found in detail');
                         }
                     }
+                } catch (RateLimitDeferredException $e) {
+                    throw $e;
                 } catch (\Throwable $e) {
                     // Leave ident as original path; downstream API call may still succeed
                     if ($debug) {
@@ -751,10 +758,34 @@ class KraSkProvider implements VideoProvider, StatusCapableProvider
      */
     private function fetchStreamCinemaItem(string $path): array
     {
-        // Append default params (ver, uid, lang, HDR, DV) to detail requests to mirror addon behavior.
+        $rateLimit = $this->getIdentFetchRateLimitSeconds();
+        $now = time();
+        $canFetch = ($this->lastIdentFetchTs === null) || (($now - $this->lastIdentFetchTs) >= $rateLimit);
+        if (!$canFetch) {
+            // Queue for later processing; deduplicate
+            if (!in_array($path, $this->scFetchQueue, true)) {
+                $this->scFetchQueue[] = $path;
+            }
+            $retryAfter = $rateLimit;
+            if ($this->lastIdentFetchTs !== null) {
+                $retryAfter = max(1, ($this->lastIdentFetchTs + $rateLimit) - $now);
+            }
+            if (($this->config['debug'] ?? false) === true) {
+                $this->debugLog(sprintf(
+                    '[RATE LIMIT] Deferred ident fetch for path %s; retry in %d seconds; queue size=%d',
+                    $path,
+                    $retryAfter,
+                    count($this->scFetchQueue)
+                ));
+            }
+            throw new RateLimitDeferredException($retryAfter, 'Stream-Cinema ident fetch deferred due to rate limit');
+        }
+        // Perform real fetch
         $query = $this->buildStreamCinemaParams([]);
         $url = self::SC_BASE . $path . (str_contains($path, '?') ? '&' : '?') . $query;
-        return $this->httpGetJson($url, 20, true);
+        $detail = $this->httpGetJson($url, 20, true);
+        $this->lastIdentFetchTs = $now;
+        return $detail;
     }
 
     /**
@@ -1028,5 +1059,103 @@ class KraSkProvider implements VideoProvider, StatusCapableProvider
         $file = $root . '/storage/logs/kraska_debug.log';
         $ts = date('c');
         @file_put_contents($file, '[' . $ts . '] ' . $line . "\n", FILE_APPEND);
+    }
+
+    /**
+     * Number of seconds between allowed Stream-Cinema detail ident fetches.
+     */
+    private function getIdentFetchRateLimitSeconds(): int
+    {
+        $raw = $this->config['ident_rate_limit_seconds'] ?? $this->config['sc_ident_rate_limit_seconds'] ?? null;
+
+        if ($raw === null) {
+            $env = getenv('KRA_SC_IDENT_RATE_LIMIT_SECONDS');
+            if (is_string($env) && $env !== '') {
+                $raw = $env;
+            }
+        }
+
+        if (is_string($raw)) {
+            $raw = trim($raw);
+        }
+
+        if ($raw === null || $raw === '') {
+            return 120;
+        }
+
+        if (!is_int($raw)) {
+            if (is_numeric((string) $raw)) {
+                $raw = (int) $raw;
+            } else {
+                return 120;
+            }
+        }
+
+        $val = (int) $raw;
+
+        return $val > 0 ? $val : 120;
+    }
+
+    /**
+     * Process queued ident fetch paths respecting rate limit. Will attempt up to $max items; if rate limit
+     * blocks the first item it aborts early. Returns number of successfully fetched (and removed) entries.
+     */
+    public function processIdentFetchQueue(int $max = 1): int
+    {
+        $processed = 0;
+        $rateLimit = $this->getIdentFetchRateLimitSeconds();
+        $now = time();
+        while ($processed < $max && !empty($this->scFetchQueue)) {
+            $canFetch = ($this->lastIdentFetchTs === null) || (($now - $this->lastIdentFetchTs) >= $rateLimit);
+            if (!$canFetch) { break; }
+            $path = array_shift($this->scFetchQueue);
+            try {
+                $query = $this->buildStreamCinemaParams([]);
+                $url = self::SC_BASE . $path . (str_contains($path, '?') ? '&' : '?') . $query;
+                $detail = $this->httpGetJson($url, 20, true);
+                $this->lastIdentFetchTs = time();
+                $processed++;
+                // For now we only fetch & drop; enrichment will occur on subsequent operations when needed.
+                if (($this->config['debug'] ?? false) === true) {
+                    $this->debugLog('[RATE LIMIT QUEUE] Fetched queued path ' . $path . '; processed=' . $processed);
+                }
+            } catch (\Throwable $e) {
+                // On error requeue once (simple retry strategy) then abort loop
+                if (!in_array($path, $this->scFetchQueue, true)) {
+                    $this->scFetchQueue[] = $path; // put back for later
+                }
+                if (($this->config['debug'] ?? false) === true) {
+                    $this->debugLog('[RATE LIMIT QUEUE] Error fetching ' . $path . ' : ' . $e->getMessage());
+                }
+                break;
+            }
+        }
+        return $processed;
+    }
+
+    /**
+     * Return current queued paths waiting for ident fetch.
+     * @return array<int,string>
+     */
+    public function getQueuedIdentFetchPaths(): array
+    {
+        return $this->scFetchQueue;
+    }
+}
+
+// Custom exception for deferred ident fetches due to rate limiting.
+class RateLimitDeferredException extends RuntimeException
+{
+    private int $retryAfterSeconds;
+
+    public function __construct(int $retryAfterSeconds, string $message = 'Stream-Cinema ident fetch deferred due to rate limit', ?\Throwable $previous = null)
+    {
+        parent::__construct($message, 0, $previous);
+        $this->retryAfterSeconds = max(1, $retryAfterSeconds);
+    }
+
+    public function getRetryAfterSeconds(): int
+    {
+        return $this->retryAfterSeconds;
     }
 }

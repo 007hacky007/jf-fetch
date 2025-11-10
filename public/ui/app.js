@@ -1489,6 +1489,8 @@ async function openProviderModal(provider) {
 				if (value === '' && existing !== '') {
 					value = existing;
 				}
+			} else {
+				value = value.trim();
 			}
 			entry[field.name] = value;
 		});
@@ -1513,24 +1515,72 @@ async function openProviderModal(provider) {
 
 		const fieldsHtml = definition.fields
 			.map((field) => {
-				const storedValue = values[field.name] ?? '';
-				const displayValue = field.type === 'password' && storedValue ? '' : storedValue;
+				const storedValue = values[field.name];
+				const hasStoredValue = !(
+					storedValue === undefined ||
+					storedValue === null ||
+					(typeof storedValue === 'string' && storedValue === '')
+				);
+				const displayValue = field.type === 'password'
+					? ''
+					: hasStoredValue
+						? String(storedValue)
+						: '';
 				const helpLines = [];
 				if (field.help) {
 					helpLines.push(field.help);
 				}
-				if (field.type === 'password' && storedValue) {
+				if (field.type === 'password' && hasStoredValue) {
 					helpLines.push('Leave blank to keep the current password.');
 				}
 				const helpText = helpLines
 					.map((line) => `<p class="text-xs text-slate-500">${escapeHtml(line)}</p>`)
 					.join('');
-				const inputType = field.type === 'password' ? 'password' : 'text';
-				const autocompleteAttr = inputType === 'password' ? 'autocomplete="new-password"' : 'autocomplete="off"';
+				const inputType = field.type === 'password'
+					? 'password'
+					: field.type === 'number'
+						? 'number'
+						: 'text';
+				const autocompleteAttr = inputType === 'password'
+					? 'autocomplete="new-password"'
+					: inputType === 'text'
+						? 'autocomplete="off"'
+						: '';
+				const extraAttributes = [];
+				if (field.placeholder) {
+					extraAttributes.push(`placeholder="${escapeHtml(field.placeholder)}"`);
+				}
+				if (field.required) {
+					extraAttributes.push('required');
+				}
+				if (autocompleteAttr) {
+					extraAttributes.push(autocompleteAttr);
+				}
+				if (field.attributes && typeof field.attributes === 'object') {
+					Object.entries(field.attributes).forEach(([attr, val]) => {
+						if (val === false || val === null || val === undefined) {
+							return;
+						}
+						if (val === true) {
+							extraAttributes.push(attr);
+							return;
+						}
+						extraAttributes.push(`${attr}="${escapeHtml(String(val))}"`);
+					});
+				}
+				const attributeList = [
+					`name="config.${field.name}"`,
+					`type="${inputType}"`,
+					`value="${escapeHtml(displayValue)}"`,
+					...extraAttributes,
+					'class="rounded-lg border border-slate-700 bg-slate-950/60 px-3 py-2 text-slate-100"',
+				];
+				const attributeString = attributeList.filter(Boolean).join(' ');
+
 				return `
 					<label class="flex flex-col gap-1 text-sm">
 						<span class="font-medium text-slate-200">${escapeHtml(field.label)}</span>
-						<input name="config.${field.name}" type="${inputType}" value="${escapeHtml(displayValue)}" ${field.placeholder ? `placeholder="${escapeHtml(field.placeholder)}"` : ''} ${field.required ? 'required' : ''} ${autocompleteAttr} class="rounded-lg border border-slate-700 bg-slate-950/60 px-3 py-2 text-slate-100" />
+						<input ${attributeString} />
 						${helpText}
 					</label>
 				`;
@@ -1589,26 +1639,59 @@ async function openProviderModal(provider) {
 			selectedTemplate = templateSelect.value;
 		}
 		const definition = providerCatalog[selectedTemplate] ?? null;
-		let configPayload = {};
 		const existingConfig = provider && provider.key === selectedTemplate && provider.config && typeof provider.config === 'object'
 			? { ...provider.config }
 			: {};
+		let configPayload = { ...existingConfig };
 
 		if (definition) {
 			const values = tempConfig[selectedTemplate] ?? {};
 			const missingField = definition.fields.find((field) => {
-				const rawValue = String(values[field.name] ?? '');
-				const isEmpty = field.type === 'password' ? rawValue === '' : rawValue.trim() === '';
-				return field.required && isEmpty;
+				const rawValue = values[field.name] ?? '';
+				const stringValue = typeof rawValue === 'string' ? rawValue : String(rawValue ?? '');
+				const comparable = field.type === 'password' ? stringValue : stringValue.trim();
+				return field.required && comparable === '';
 			});
 			if (missingField) {
 				showToast(`${missingField.label} is required.`, 'error');
 				return;
 			}
+
+			const invalidNumberField = definition.fields.find((field) => {
+				if (field.type !== 'number') return false;
+				const rawValue = values[field.name] ?? '';
+				const trimmed = String(rawValue ?? '').trim();
+				if (trimmed === '') {
+					return false;
+				}
+				if (!/^\d+$/.test(trimmed)) {
+					return true;
+				}
+				const numeric = Number.parseInt(trimmed, 10);
+				return Number.isNaN(numeric) || numeric <= 0;
+			});
+			if (invalidNumberField) {
+				showToast(`${invalidNumberField.label} must be a positive whole number.`, 'error');
+				return;
+			}
+
 			configPayload = { ...existingConfig };
 			definition.fields.forEach((field) => {
-				const rawValue = String(values[field.name] ?? '');
-				configPayload[field.name] = field.type === 'password' ? rawValue : rawValue.trim();
+				const rawValue = values[field.name] ?? '';
+				if (field.type === 'password') {
+					configPayload[field.name] = String(rawValue);
+					return;
+				}
+				if (field.type === 'number') {
+					const trimmed = String(rawValue ?? '').trim();
+					if (trimmed === '') {
+						delete configPayload[field.name];
+					} else {
+						configPayload[field.name] = Number.parseInt(trimmed, 10);
+					}
+					return;
+				}
+				configPayload[field.name] = String(rawValue ?? '').trim();
 			});
 		}
 
@@ -1621,9 +1704,10 @@ async function openProviderModal(provider) {
 			return;
 		}
 
-		// Add debug flag to config if checked
 		if (formData.get('debug') !== null) {
 			configPayload.debug = true;
+		} else {
+			delete configPayload.debug;
 		}
 
 		const payload = {

@@ -134,6 +134,17 @@ Key endpoints exposed under `public/api/` (not exhaustive):
 
 `config/app.ini` contains all runtime settings. The `[aria2]` section defines the JSON-RPC endpoint and secret used by `App\Download\Aria2Client`, while `[webshare]` stores the `wst` token consumed by `App\Providers\WebshareProvider`. Other sections configure Jellyfin, storage paths, and database connectivity. Avoid hard-coding configuration elsewhere—update the INI files instead.
 
+### Kra.sk / Stream-Cinema ident rate limiting
+
+Stream-Cinema detail endpoints used to derive Kra.sk `ident` values are rate limited upstream (empirically ~1 request per 2 minutes). To respect this constraint the Kra.sk provider enforces a configurable interval between detail fetches:
+
+- Per-provider setting: fill in “Ident fetch rate limit (seconds)” when creating or editing the Kra.sk provider (defaults to `120` when left blank).
+- When a detail request would violate the limit it is queued internally and a `RateLimitDeferredException` is raised inside the provider (not surfaced as a hard failure to callers unless explicitly caught).
+- A background worker or scheduled task can call `processIdentFetchQueue($max = 1)` on the provider instance to advance the queue once the interval has elapsed.
+- Search results may temporarily omit enriched metadata (size/codec) until the queued detail is processed.
+
+Lowering the interval below upstream limits risks throttling; increase it if you observe 429/too many requests errors.
+
 ### Jellyfin integration
 
 Provide your Jellyfin **Server URL** and **API key** in the Settings tab to enable automatic library refreshes after a download completes or a previously completed file is deleted. For faster, scoped scans you can optionally set a **Library ID** (Virtual Folder ID). Use the "Fetch libraries" button to query `/Library/VirtualFolders` and select from the available libraries; the selected ID is stored in `jellyfin.library_id`.
@@ -177,7 +188,7 @@ Search path: This app mirrors the Kodi addon multi‑stage flow:
 1. Acquire/refresh a Stream‑Cinema auth token via `POST /auth/token?krt=<kra_session>` (headers include `X-Uuid` — static if you configured one).
 2. Perform an authenticated GET: `https://stream-cinema.online/kodi/Search/search?search=<q>&id=search`.
 3. Parse `menu` entries; each may embed basic metadata (`quality`, `lang`, `bitrate`).
-4. For entries that are navigational paths (e.g. `/Movie/12345`) fetch detail JSON to inspect `strms`.
+4. For entries that are navigational paths (e.g. `/Movie/12345`) fetch detail JSON to inspect `strms` (subject to the ident rate limit queue described above).
 5. Select the first stream with provider `kraska` and extract its `ident`.
 6. Resolve ident via Kra.sk: `POST /api/file/download` to get the ephemeral direct download URL (`data.link`).
 

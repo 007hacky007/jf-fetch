@@ -9,6 +9,7 @@ use App\Infra\Db;
 use App\Infra\ProviderSecrets;
 use App\Providers\VideoProvider;
 use App\Providers\WebshareProvider;
+use App\Providers\RateLimitDeferredException;
 use App\Support\Clock;
 
 /**
@@ -83,6 +84,7 @@ function runSchedulerLoop(string $root): void
 
 	$aria2 = new Aria2Client();
 	$loopDelaySeconds = 3;
+	$providerThrottleUntil = [];
 
 	logInfo('Scheduler started.');
 
@@ -100,13 +102,45 @@ function runSchedulerLoop(string $root): void
 				continue;
 			}
 
-			$job = claimNextJob();
+			$now = time();
+			$skipProviderIds = [];
+			foreach ($providerThrottleUntil as $providerId => $until) {
+				if ($until > $now) {
+					$skipProviderIds[] = (int) $providerId;
+				} else {
+					unset($providerThrottleUntil[$providerId]);
+				}
+			}
+
+			$job = claimNextJob($skipProviderIds);
 			if ($job === null) {
 				sleepWithLog($loopDelaySeconds, 'No queued jobs found.');
 				continue;
 			}
 
-			processJob($job, $aria2);
+			$providerId = (int) $job['provider_id'];
+			$providerRow = fetchProvider($providerId);
+			if ($providerRow === null || (int) $providerRow['enabled'] !== 1) {
+				failJob((int) $job['id'], 'Provider disabled or missing.', $job);
+				continue;
+			}
+
+			try {
+				processJob($job, $providerRow, $aria2);
+			} catch (RateLimitDeferredException $exception) {
+				returnJobToQueue((int) $job['id']);
+				$providerThrottleUntil[$providerId] = time() + $exception->getRetryAfterSeconds();
+				$providerName = isset($providerRow['name']) && $providerRow['name'] !== ''
+					? (string) $providerRow['name']
+					: sprintf('Provider #%d', $providerId);
+				logInfo(sprintf(
+					'%s rate limited; will retry job %d in approximately %d seconds.',
+					$providerName,
+					(int) $job['id'],
+					$exception->getRetryAfterSeconds()
+				));
+				continue;
+			}
 		} catch (Throwable $exception) {
 			logError('Scheduler error: ' . $exception->getMessage());
 			sleep($loopDelaySeconds);
@@ -117,14 +151,22 @@ function runSchedulerLoop(string $root): void
 /**
  * Attempts to claim the next queued job by setting its status to `starting`.
  *
+ * @param array<int> $skipProviderIds
  * @return array<string, mixed>|null
  */
-function claimNextJob(): ?array
+function claimNextJob(array $skipProviderIds = []): ?array
 {
-	return Db::transaction(static function () {
-		$stmt = Db::run(
-			"SELECT * FROM jobs WHERE status = 'queued' ORDER BY priority ASC, position ASC, created_at ASC LIMIT 1"
-		);
+	return Db::transaction(static function () use ($skipProviderIds) {
+		$params = [];
+		$sql = "SELECT * FROM jobs WHERE status = 'queued'";
+		if ($skipProviderIds !== []) {
+			$placeholders = implode(',', array_fill(0, count($skipProviderIds), '?'));
+			$sql .= " AND provider_id NOT IN ($placeholders)";
+			$params = array_map('intval', $skipProviderIds);
+		}
+		$sql .= " ORDER BY priority ASC, position ASC, created_at ASC LIMIT 1";
+
+		$stmt = Db::run($sql, $params);
 
 		$job = $stmt->fetch(PDO::FETCH_ASSOC);
 		if ($job === false) {
@@ -154,16 +196,10 @@ function claimNextJob(): ?array
  * Processes the job: resolve provider URL and enqueue with aria2.
  *
  * @param array<string, mixed> $job
+ * @param array<string, mixed> $providerRow
  */
-function processJob(array $job, Aria2Client $aria2): void
+function processJob(array $job, array $providerRow, Aria2Client $aria2): void
 {
-	$providerRow = fetchProvider((int) $job['provider_id']);
-	if ($providerRow === null || (int) $providerRow['enabled'] !== 1) {
-		failJob((int) $job['id'], 'Provider disabled or missing.', $job);
-
-		return;
-	}
-
 	$provider = buildProvider($providerRow);
 
 	try {
@@ -205,6 +241,8 @@ function processJob(array $job, Aria2Client $aria2): void
 		]);
 
 		logInfo(sprintf('Job %d enqueued with aria2 gid %s.', $job['id'], $gid));
+	} catch (RateLimitDeferredException $exception) {
+		throw $exception;
 	} catch (Throwable $exception) {
 		failJob((int) $job['id'], 'Failed to enqueue job: ' . $exception->getMessage(), $job);
 	}
@@ -315,14 +353,30 @@ function fetchProvider(int $providerId): ?array
  */
 function buildProvider(array $providerRow): VideoProvider
 {
+	static $cache = [];
+
+	$providerId = isset($providerRow['id']) ? (int) $providerRow['id'] : 0;
 	$key = (string) $providerRow['key'];
+	$configFingerprint = sha1($key . '|' . ($providerRow['config_json'] ?? '') . '|' . ($providerRow['updated_at'] ?? ''));
+
+	if (isset($cache[$providerId]) && $cache[$providerId]['fingerprint'] === $configFingerprint) {
+		return $cache[$providerId]['provider'];
+	}
+
 	$config = ProviderSecrets::decrypt($providerRow);
 
-	return match ($key) {
+	$provider = match ($key) {
 		'webshare' => new WebshareProvider($config),
 		'kraska' => new App\Providers\KraSkProvider($config),
 		default => throw new RuntimeException('Unsupported provider: ' . $key),
 	};
+
+	$cache[$providerId] = [
+		'fingerprint' => $configFingerprint,
+		'provider' => $provider,
+	];
+
+	return $provider;
 }
 
 /**
@@ -351,6 +405,20 @@ function failJob(int $jobId, string $message, ?array $job = null): void
 	}
 
 	logError(sprintf('Job %d failed: %s', $jobId, $message));
+}
+
+/**
+ * Returns a claimed job back to the queued state without marking it as failed.
+ */
+function returnJobToQueue(int $jobId): void
+{
+	Db::run(
+		"UPDATE jobs SET status = 'queued', aria2_gid = NULL, updated_at = :updated_at WHERE id = :id",
+		[
+			'updated_at' => Clock::nowString(),
+			'id' => $jobId,
+		]
+	);
 }
 
 /**

@@ -193,6 +193,15 @@ export const providerCatalog = {
 				type: 'text',
 				help: 'If provided, used as X-Uuid header for Stream-Cinema requests; leave blank to auto-generate.',
 			},
+			{
+				name: 'ident_rate_limit_seconds',
+				label: 'Ident fetch rate limit (seconds)',
+				placeholder: '120',
+				required: false,
+				type: 'number',
+				attributes: { min: 1, step: 1 },
+				help: 'Minimum seconds between Stream-Cinema detail requests. Leave blank to use the default (120).',
+			},
 		],
 	},
 };

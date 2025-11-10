@@ -102,6 +102,29 @@ final class ProviderConfig
                 throw new RuntimeException('Kra.sk uuid has invalid format. Use 5-50 alphanumeric or dash characters.');
             }
         }
+
+        $rateLimit = $config['ident_rate_limit_seconds'] ?? $config['sc_ident_rate_limit_seconds'] ?? null;
+        if (is_string($rateLimit)) {
+            $rateLimit = trim($rateLimit);
+        }
+
+        if ($rateLimit === null || $rateLimit === '') {
+            $normalizedRateLimit = 120;
+        } else {
+            $rateLimitString = (string) $rateLimit;
+            if (preg_match('/^\d+$/', $rateLimitString) !== 1) {
+                throw new RuntimeException('Kra.sk ident rate limit must be a positive whole number of seconds.');
+            }
+
+            $normalizedRateLimit = (int) $rateLimitString;
+            if ($normalizedRateLimit <= 0) {
+                throw new RuntimeException('Kra.sk ident rate limit must be greater than zero seconds.');
+            }
+        }
+
+        $config['ident_rate_limit_seconds'] = $normalizedRateLimit;
+        unset($config['sc_ident_rate_limit_seconds']);
+
         return $config;
     }
 }
