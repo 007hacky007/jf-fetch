@@ -797,6 +797,7 @@ function hideAdminTabs() {
 }
 
 function switchView(view) {
+	state.currentView = view;
 	els.tabs.forEach((tab) => {
 		const isActive = tab.dataset.view === view;
 		tab.classList.toggle('is-active', isActive);

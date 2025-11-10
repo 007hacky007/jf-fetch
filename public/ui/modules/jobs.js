@@ -737,6 +737,14 @@ function setupInfiniteScroll() {
 	if (state._jobsInfiniteScrollBound) return;
 	state._jobsInfiniteScrollBound = true;
 	window.addEventListener('scroll', () => {
+		if (state.currentView !== 'queue') {
+			return;
+		}
+
+		if (els.queueView && els.queueView.classList.contains('hidden')) {
+			return;
+		}
+
 		const scrollNode = document.documentElement;
 		const scrollTop = window.scrollY || scrollNode.scrollTop;
 		const viewport = window.innerHeight || scrollNode.clientHeight;

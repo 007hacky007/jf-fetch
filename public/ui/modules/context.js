@@ -27,6 +27,7 @@ export const state = {
 	settingsError: null,
 	jobStreamConnectedAt: null, // timestamp (ms) when current SSE connection opened
 	defaultSearchLimit: 50,
+	currentView: 'search',
 	// Paging metadata for jobs list (server-side infinite scroll)
 	jobsPageSize: 10,
 	jobsOffset: 0,
@@ -88,6 +89,7 @@ export const els = {
 	kraskaQueueBtn: document.getElementById('kraska-queue-btn'),
 	kraskaRefreshBtn: document.getElementById('kraska-refresh-btn'),
 	kraskaCacheMeta: document.getElementById('kraska-cache-meta'),
+	queueView: document.getElementById('queue-view'),
 	jobsList: document.getElementById('jobs-list'),
 	jobsEmpty: document.getElementById('jobs-empty'),
 	jobsSummary: document.getElementById('jobs-summary'),
