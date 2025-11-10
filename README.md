@@ -147,6 +147,10 @@ Refresh behavior:
 
 Selecting a library ID avoids a full-library scan (especially helpful on large multi‑TB libraries) and keeps Jellyfin responsive.
 
+### Default Search Limit
+
+Administrators can configure a global default search result limit under the **Settings → Application** panel. The field "Default search limit" sets how many results per provider are returned when the UI performs a search without explicitly specifying a `limit` query parameter. Valid range: 1–100. If unset or invalid the system falls back to 50. Supplying a `limit` parameter in the search request overrides this default per call.
+
 ### Adding the Webshare provider
 
 1. Sign in with an administrator account and open the **Providers** tab.

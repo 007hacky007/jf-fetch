@@ -322,6 +322,7 @@ async function saveSettings() {
 			base_url: (els.settingsBaseUrl?.value ?? '').trim(),
 			max_active_downloads: maxDownloads,
 			min_free_space_gb: minFreeSpace,
+			default_search_limit: Number.parseInt(els.settingsDefaultSearchLimit?.value ?? '', 10) || null,
 		},
 		paths: {
 			downloads: (els.settingsDownloadsPath?.value ?? '').trim(),
@@ -385,6 +386,7 @@ function renderSettings() {
 		els.settingsBaseUrl,
 		els.settingsMaxDownloads,
 		els.settingsMinFreeSpace,
+		els.settingsDefaultSearchLimit,
 		els.settingsDownloadsPath,
 		els.settingsLibraryPath,
 		els.settingsJellyfinUrl,
@@ -413,6 +415,10 @@ function renderSettings() {
 		if (els.settingsMinFreeSpace) {
 			const minFreeSpace = settings?.app?.min_free_space_gb;
 			els.settingsMinFreeSpace.value = minFreeSpace === null || Number.isNaN(minFreeSpace) ? '' : String(minFreeSpace);
+		}
+		if (els.settingsDefaultSearchLimit) {
+			const dsl = settings?.app?.default_search_limit;
+			els.settingsDefaultSearchLimit.value = dsl === null || dsl === undefined ? '' : String(dsl);
 		}
 		if (els.settingsDownloadsPath) {
 			els.settingsDownloadsPath.value = settings?.paths?.downloads ?? '';

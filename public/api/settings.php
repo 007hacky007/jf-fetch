@@ -79,6 +79,7 @@ function buildSettingsResponse(): array
 			'base_url' => (string) Config::get('app.base_url'),
 			'max_active_downloads' => (int) Config::get('app.max_active_downloads'),
 			'min_free_space_gb' => (float) Config::get('app.min_free_space_gb'),
+			'default_search_limit' => (int) Config::get('app.default_search_limit'),
 		],
 		'paths' => [
 			'downloads' => (string) Config::get('paths.downloads'),
@@ -103,6 +104,7 @@ function validateSettingsPayload(array $payload): array
 		'app.base_url' => ['section' => 'app', 'field' => 'base_url', 'type' => 'string', 'required' => true],
 		'app.max_active_downloads' => ['section' => 'app', 'field' => 'max_active_downloads', 'type' => 'int', 'min' => 0],
 		'app.min_free_space_gb' => ['section' => 'app', 'field' => 'min_free_space_gb', 'type' => 'float', 'min' => 0],
+		'app.default_search_limit' => ['section' => 'app', 'field' => 'default_search_limit', 'type' => 'int', 'min' => 1, 'max' => 100],
 		'paths.downloads' => ['section' => 'paths', 'field' => 'downloads', 'type' => 'string', 'required' => true],
 		'paths.library' => ['section' => 'paths', 'field' => 'library', 'type' => 'string', 'required' => true],
 		'jellyfin.url' => ['section' => 'jellyfin', 'field' => 'url', 'type' => 'string', 'required' => false],
@@ -159,6 +161,18 @@ function validateSettingsPayload(array $payload): array
 				}
 
 				$normalized[$key] = (float) $value;
+				break;
+
+			case 'app.default_search_limit':
+				$min = (int) ($definition['min'] ?? 1);
+				$max = (int) ($definition['max'] ?? 100);
+				$value = filter_var($rawValue, FILTER_VALIDATE_INT, ['options' => ['min_range' => $min]]);
+				if ($value === false || (int) $value > $max) {
+					$errors[$key] = sprintf('Default search limit must be an integer between %d and %d.', $min, $max);
+					break;
+				}
+
+				$normalized[$key] = (int) $value;
 				break;
 
 			case 'paths.downloads':

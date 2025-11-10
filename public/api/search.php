@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use App\Infra\Auth;
+use App\Infra\Config;
 use App\Infra\Db;
 use App\Infra\Http;
 use App\Infra\ProviderSecrets;
@@ -31,7 +32,12 @@ if ($query === '') {
     exit;
 }
 
-$limit = isset($_GET['limit']) ? max(1, min(100, (int) $_GET['limit'])) : 50;
+$limitParam = isset($_GET['limit']) ? (int) $_GET['limit'] : 0;
+$configuredDefault = (int) Config::get('app.default_search_limit');
+if ($configuredDefault <= 0) {
+    $configuredDefault = 50; // fallback safety
+}
+$limit = $limitParam > 0 ? max(1, min(100, $limitParam)) : max(1, min(100, $configuredDefault));
 $filterProviders = isset($_GET['providers']) && is_array($_GET['providers']) ? array_map('strval', $_GET['providers']) : null;
 
 $rows = Db::run('SELECT * FROM providers WHERE enabled = 1 ORDER BY name ASC')->fetchAll();

@@ -82,6 +82,7 @@ export const els = {
 	settingsBaseUrl: document.getElementById('settings-base-url'),
 	settingsMaxDownloads: document.getElementById('settings-max-downloads'),
 	settingsMinFreeSpace: document.getElementById('settings-min-free-space'),
+	settingsDefaultSearchLimit: document.getElementById('settings-default-search-limit'),
 	settingsDownloadsPath: document.getElementById('settings-downloads-path'),
 	settingsLibraryPath: document.getElementById('settings-library-path'),
 	settingsJellyfinUrl: document.getElementById('settings-jellyfin-url'),
