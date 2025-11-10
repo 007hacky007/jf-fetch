@@ -37,6 +37,19 @@ final class KraSkProviderTest extends TestCase
         ], $apiAdapter, $scAdapter);
     }
 
+    private function primeStreamCinemaToken(KraSkProvider $provider): void
+    {
+        $ref = new ReflectionClass($provider);
+        foreach ([
+            'scToken' => 'test-token',
+            'lastScTokenTs' => time(),
+        ] as $property => $value) {
+            $prop = $ref->getProperty($property);
+            $prop->setAccessible(true);
+            $prop->setValue($provider, $value);
+        }
+    }
+
     public function testSearchNormalizesResults(): void
     {
         $apiResponses = [
@@ -62,6 +75,75 @@ final class KraSkProviderTest extends TestCase
         $this->assertCount(2, $results);
     $this->assertSame('/Play/abc', $results[0]['id']);
         $this->assertSame('kraska', $results[0]['provider']);
+    }
+
+    public function testBrowseMenuNormalizesEntries(): void
+    {
+        $apiResponses = [];
+        $scBase = 'https://stream-cinema.online/kodi';
+        $defaultParams = 'DV=1&HDR=1&lang=en&skin=default&uid=test-uuid&ver=2.0';
+        $scResponses = [
+            [
+                'url' => $scBase . '/?' . $defaultParams,
+                'response' => [
+                    'menu' => [
+                        [
+                            'type' => 'dir',
+                            'title' => 'Movies',
+                            'url' => '/Movies',
+                            'i18n_info' => [
+                                'en' => ['title' => 'Movies', 'plot' => 'Browse available films'],
+                            ],
+                        ],
+                        [
+                            'type' => 'video',
+                            'title' => 'Example Movie',
+                            'url' => '/Play/123',
+                            'info' => ['year' => 2020, 'rating' => 8.5],
+                            'stream_info' => [
+                                'video' => ['height' => 1080, 'codec' => 'h264', 'duration' => 5400],
+                                'audio' => ['codec' => 'dts', 'channels' => 6],
+                                'langs' => ['EN' => 1, 'CZ' => 1],
+                            ],
+                            'i18n_info' => [
+                                'en' => ['title' => 'Example Movie', 'plot' => 'An [B]exciting[/B] film.'],
+                            ],
+                            'i18n_art' => [
+                                'en' => ['thumb' => 'https://example.com/thumb.jpg'],
+                            ],
+                        ],
+                    ],
+                    'system' => ['setPluginCategory' => 'Home'],
+                    'filter' => ['view' => 'movies'],
+                ],
+            ],
+        ];
+
+        $provider = $this->providerWithFixtures($apiResponses, $scResponses);
+        $this->primeStreamCinemaToken($provider);
+
+        $result = $provider->browseMenu('/');
+
+        $this->assertSame('/', $result['path']);
+        $this->assertSame('Home', $result['title']);
+        $this->assertArrayHasKey('filter', $result);
+        $this->assertCount(2, $result['items']);
+
+        $dir = $result['items'][0];
+        $this->assertSame('dir', $dir['type']);
+        $this->assertSame('/Movies', $dir['path']);
+        $this->assertFalse($dir['selectable']);
+
+        $video = $result['items'][1];
+        $this->assertSame('video', $video['type']);
+        $this->assertTrue($video['selectable']);
+        $this->assertSame('/Play/123', $video['ident']);
+        $this->assertSame('kraska', $video['provider']);
+        $this->assertSame(2020, $video['meta']['year']);
+        $this->assertSame('1080p H264', $video['meta']['quality']);
+        $this->assertSame(['EN', 'CZ'], $video['meta']['languages']);
+        $this->assertSame('An exciting film.', $video['summary']);
+        $this->assertSame('https://example.com/thumb.jpg', $video['art']['thumb']);
     }
 
     public function testResolveReturnsLink(): void

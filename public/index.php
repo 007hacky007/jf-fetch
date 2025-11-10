@@ -116,6 +116,14 @@ function dispatchApiRoute(string $apiRoot, array $segments): bool
             break;
 
         case 'providers':
+            if (count($segments) >= 2 && $segments[1] === 'kraska') {
+                if (count($segments) === 3 && $segments[2] === 'menu' && $method === 'GET') {
+                    require $apiRoot . '/providers/kraska/menu.php';
+
+                    return true;
+                }
+            }
+
             if (count($segments) === 1) {
                 if ($method === 'GET') {
                     require $apiRoot . '/providers/list.php';

@@ -314,6 +314,47 @@ class KraSkProvider implements VideoProvider, StatusCapableProvider
     }
 
     /**
+     * Browse the Stream-Cinema hierarchical menu using Kra.sk credentials.
+     * The response mirrors Kodi's structure but is normalised for the UI.
+     *
+     * @return array<string,mixed>
+     */
+    public function browseMenu(string $path = '/'): array
+    {
+        $normalizedPath = $this->normalizeMenuPath($path);
+        $query = $this->buildStreamCinemaParams([]);
+        $baseUrl = rtrim(self::SC_BASE, '/');
+        $url = $baseUrl . $normalizedPath;
+        $url .= str_contains($normalizedPath, '?') ? '&' . $query : '?' . $query;
+
+        $response = $this->httpGetJson($url, 20, true);
+
+        $items = [];
+        $rawMenu = $response['menu'] ?? [];
+        if (is_array($rawMenu)) {
+            foreach ($rawMenu as $entry) {
+                if (!is_array($entry)) {
+                    continue;
+                }
+                $items[] = $this->normalizeMenuEntry($entry);
+            }
+        }
+
+        $result = [
+            'path' => $normalizedPath,
+            'title' => $this->extractMenuTitle($response),
+            'items' => $items,
+        ];
+
+        $filter = $response['filter'] ?? null;
+        if (is_array($filter) && $filter !== []) {
+            $result['filter'] = $filter;
+        }
+
+        return $result;
+    }
+
+    /**
      * Resolve a download URL from a file ident.
      * Kra.sk endpoint: POST /api/file/download { data: { ident: <id> } }
      * Returns { data: { link: "https://..." } }
@@ -587,6 +628,331 @@ class KraSkProvider implements VideoProvider, StatusCapableProvider
             'bitrate_kbps' => $bitrate,
             'source' => $file,
         ] + $extra;
+    }
+
+    /**
+     * Normalise a Stream-Cinema menu entry for UI consumption.
+     *
+     * @param array<string,mixed> $entry
+     * @return array<string,mixed>
+     */
+    private function normalizeMenuEntry(array $entry): array
+    {
+        $typeRaw = strtolower(trim((string) ($entry['type'] ?? '')));
+        $type = $typeRaw !== '' ? $typeRaw : (isset($entry['strms']) ? 'video' : 'dir');
+        $result = [
+            'type' => $type,
+            'label' => $this->deriveTitle($entry),
+            'provider' => 'kraska',
+        ];
+
+        if ($this->isDirectoryType($type)) {
+            $dirUrl = $entry['url'] ?? ($entry['path'] ?? null);
+            if (is_string($dirUrl) && $dirUrl !== '') {
+                $result['path'] = $this->normalizeMenuPath($dirUrl);
+            }
+            $result['selectable'] = false;
+        } elseif ($this->isPlayableType($type)) {
+            $ident = $this->extractIdentFromMenuEntry($entry);
+            if ($ident !== null) {
+                $result['ident'] = $ident;
+                $result['selectable'] = true;
+            } else {
+                $result['selectable'] = false;
+            }
+        } else {
+            $url = $entry['url'] ?? null;
+            if (is_string($url) && str_starts_with($url, 'cmd://')) {
+                $result['command'] = $url;
+            } elseif (is_string($url) && $url !== '') {
+                $result['path'] = $this->normalizeMenuPath($url);
+            }
+            $result['selectable'] = isset($result['ident']);
+        }
+
+        $summary = $this->extractMenuPlot($entry);
+        if ($summary !== null && $summary !== '') {
+            $result['summary'] = $summary;
+        }
+
+        $meta = $this->extractMenuMeta($entry);
+        if ($meta !== []) {
+            $result['meta'] = $meta;
+        }
+
+        $art = $this->extractMenuArt($entry);
+        if ($art !== []) {
+            $result['art'] = $art;
+        }
+
+        return $result;
+    }
+
+    /**
+     * Normalise Stream-Cinema path ensuring leading slash and preserved query string.
+     */
+    private function normalizeMenuPath(string $path): string
+    {
+        $value = trim($path);
+        if ($value === '') {
+            return '/';
+        }
+
+        if (preg_match('#^https?://#i', $value) === 1) {
+            $parts = parse_url($value);
+            $value = $parts['path'] ?? '/';
+            if (isset($parts['query']) && $parts['query'] !== '') {
+                $value .= '?' . $parts['query'];
+            }
+        }
+
+        if ($value === '') {
+            $value = '/';
+        }
+
+        if ($value[0] !== '/') {
+            $value = '/' . $value;
+        }
+
+        $segments = explode('?', $value, 2);
+        $pathPart = preg_replace('#/{2,}#', '/', $segments[0]) ?: '/';
+        if ($pathPart === '') {
+            $pathPart = '/';
+        }
+
+        if (isset($segments[1]) && $segments[1] !== '') {
+            return $pathPart . '?' . $segments[1];
+        }
+
+        return $pathPart;
+    }
+
+    /**
+     * Extracts human friendly title for current menu level from response metadata.
+     *
+     * @param array<string,mixed> $response
+     */
+    private function extractMenuTitle(array $response): ?string
+    {
+        $system = $response['system'] ?? null;
+        if (is_array($system)) {
+            foreach (['setPluginCategory', 'label', 'title'] as $key) {
+                if (isset($system[$key]) && is_string($system[$key]) && $system[$key] !== '') {
+                    return $this->cleanMarkup($system[$key]);
+                }
+            }
+        }
+
+        $filter = $response['filter'] ?? null;
+        if (is_array($filter) && isset($filter['label']) && is_string($filter['label']) && $filter['label'] !== '') {
+            return $this->cleanMarkup($filter['label']);
+        }
+
+        return null;
+    }
+
+    /**
+     * Extracts a descriptive plot/summary from menu entry if available.
+     *
+     * @param array<string,mixed> $entry
+     */
+    private function extractMenuPlot(array $entry): ?string
+    {
+        $preferred = strtolower((string) ($this->config['lang'] ?? 'cs'));
+        $order = array_unique(array_merge([$preferred], ['cs', 'sk', 'en']));
+        $i18n = $entry['i18n_info'] ?? null;
+        if (is_array($i18n)) {
+            foreach ($order as $lang) {
+                if (!isset($i18n[$lang]) || !is_array($i18n[$lang])) {
+                    continue;
+                }
+                $plot = $i18n[$lang]['plot'] ?? null;
+                if (is_string($plot) && $plot !== '') {
+                    $clean = $this->cleanMarkup($plot);
+                    if ($clean !== '') {
+                        return $clean;
+                    }
+                }
+            }
+        }
+
+        foreach (['plot', 'description', 'desc'] as $field) {
+            if (isset($entry[$field]) && is_string($entry[$field]) && $entry[$field] !== '') {
+                $clean = $this->cleanMarkup($entry[$field]);
+                if ($clean !== '') {
+                    return $clean;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Extract key metadata (year, rating, duration, codecs) for menu entry.
+     *
+     * @param array<string,mixed> $entry
+     * @return array<string,mixed>
+     */
+    private function extractMenuMeta(array $entry): array
+    {
+        $info = is_array($entry['info'] ?? null) ? $entry['info'] : [];
+        $streamInfo = is_array($entry['stream_info'] ?? null) ? $entry['stream_info'] : [];
+        $videoInfo = is_array($streamInfo['video'] ?? null) ? $streamInfo['video'] : [];
+        $audioInfo = is_array($streamInfo['audio'] ?? null) ? $streamInfo['audio'] : [];
+
+        $duration = null;
+        if (isset($videoInfo['duration']) && is_numeric($videoInfo['duration'])) {
+            $duration = (int) $videoInfo['duration'];
+        } elseif (isset($info['duration']) && is_numeric($info['duration'])) {
+            $duration = (int) $info['duration'];
+        }
+
+        $height = isset($videoInfo['height']) && is_numeric($videoInfo['height']) ? (int) $videoInfo['height'] : null;
+        $width = isset($videoInfo['width']) && is_numeric($videoInfo['width']) ? (int) $videoInfo['width'] : null;
+        $videoCodec = isset($videoInfo['codec']) && is_string($videoInfo['codec']) ? strtoupper($videoInfo['codec']) : null;
+
+        $quality = null;
+        if ($height !== null) {
+            $quality = $height . 'p' . ($videoCodec ? ' ' . $videoCodec : '');
+        } elseif ($videoCodec !== null) {
+            $quality = $videoCodec;
+        }
+
+        $languages = [];
+        if (isset($streamInfo['langs']) && is_array($streamInfo['langs'])) {
+            $languages = array_values(array_map('strval', array_keys($streamInfo['langs'])));
+        }
+
+        $meta = [
+            'year' => isset($info['year']) && is_numeric($info['year']) ? (int) $info['year'] : null,
+            'rating' => isset($info['rating']) && is_numeric($info['rating']) ? (float) $info['rating'] : null,
+            'season' => isset($info['season']) && is_numeric($info['season']) ? (int) $info['season'] : null,
+            'episode' => isset($info['episode']) && is_numeric($info['episode']) ? (int) $info['episode'] : null,
+            'duration_seconds' => $duration,
+            'quality' => $quality,
+            'languages' => $languages,
+            'video_codec' => $videoCodec,
+            'video_height' => $height,
+            'video_width' => $width,
+            'audio_codec' => isset($audioInfo['codec']) && is_string($audioInfo['codec']) ? strtoupper($audioInfo['codec']) : null,
+            'audio_channels' => isset($audioInfo['channels']) && is_numeric($audioInfo['channels']) ? (int) $audioInfo['channels'] : null,
+            'fps' => isset($streamInfo['fps']) ? (string) $streamInfo['fps'] : null,
+        ];
+
+        if ($meta['languages'] === []) {
+            unset($meta['languages']);
+        }
+
+        return array_filter($meta, static fn ($value) => $value !== null && $value !== '');
+    }
+
+    /**
+     * Extract artwork URLs for menu entry.
+     *
+     * @param array<string,mixed> $entry
+     * @return array<string,string>
+     */
+    private function extractMenuArt(array $entry): array
+    {
+        $art = [];
+        $preferred = strtolower((string) ($this->config['lang'] ?? 'cs'));
+        $order = array_unique(array_merge([$preferred], ['cs', 'sk', 'en']));
+        $i18nArt = $entry['i18n_art'] ?? null;
+        if (is_array($i18nArt)) {
+            foreach ($order as $lang) {
+                if (!isset($i18nArt[$lang]) || !is_array($i18nArt[$lang])) {
+                    continue;
+                }
+                foreach (['thumb', 'poster', 'fanart', 'banner'] as $field) {
+                    if (isset($i18nArt[$lang][$field]) && is_string($i18nArt[$lang][$field]) && $i18nArt[$lang][$field] !== '') {
+                        $art[$field] = $i18nArt[$lang][$field];
+                    }
+                }
+                if ($art !== []) {
+                    break;
+                }
+            }
+        }
+
+        foreach (['thumb', 'poster', 'fanart', 'banner'] as $field) {
+            if (!isset($art[$field]) && isset($entry[$field]) && is_string($entry[$field]) && $entry[$field] !== '') {
+                $art[$field] = $entry[$field];
+            }
+        }
+
+        return $art;
+    }
+
+    /**
+     * Determine queue ident (Stream-Cinema path or Kra.sk ident) for playable entries.
+     *
+     * @param array<string,mixed> $entry
+     */
+    private function extractIdentFromMenuEntry(array $entry): ?string
+    {
+        $type = strtolower((string) ($entry['type'] ?? ''));
+        if ($type !== '' && !$this->isPlayableType($type)) {
+            return null;
+        }
+
+        $strms = $entry['strms'] ?? null;
+        if (is_array($strms)) {
+            foreach ($strms as $stream) {
+                if (!is_array($stream)) {
+                    continue;
+                }
+                $provider = strtolower((string) ($stream['provider'] ?? ($stream['prov'] ?? '')));
+                if ($provider !== '' && !in_array($provider, ['kraska', 'kra.sk', 'krask', 'kra'], true)) {
+                    continue;
+                }
+                $ident = $stream['ident'] ?? $stream['sid'] ?? null;
+                if (is_string($ident) && $ident !== '') {
+                    return $ident;
+                }
+                if (isset($stream['url']) && is_string($stream['url']) && $stream['url'] !== '') {
+                    return $this->normalizeMenuPath($stream['url']);
+                }
+            }
+        }
+
+        $url = $entry['url'] ?? null;
+        if (is_string($url) && $url !== '') {
+            $normalized = $this->normalizeMenuPath($url);
+            if ($normalized !== '') {
+                return $normalized;
+            }
+        }
+
+        $id = $entry['id'] ?? null;
+        if (is_string($id) && $id !== '') {
+            return '/Play/' . $id;
+        }
+        if (is_int($id) || is_float($id)) {
+            return '/Play/' . (int) $id;
+        }
+
+        return null;
+    }
+
+    private function isDirectoryType(string $type): bool
+    {
+        return in_array($type, ['dir', 'directory', 'folder', 'season', 'menu', 'context'], true);
+    }
+
+    private function isPlayableType(string $type): bool
+    {
+        return in_array($type, ['video', 'movie', 'episode', 'file', 'stream'], true);
+    }
+
+    private function cleanMarkup(string $value): string
+    {
+        $stripped = preg_replace('/\[[^\]]+\]/', '', $value);
+        if ($stripped === null) {
+            $stripped = $value;
+        }
+        $text = strip_tags($stripped);
+        return trim($text);
     }
 
     /**

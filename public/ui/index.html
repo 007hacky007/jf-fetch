@@ -67,6 +67,7 @@
           <div class="space-y-6">
             <nav id="view-tabs" class="flex flex-wrap gap-2 rounded-2xl border border-slate-800/80 bg-slate-900/70 p-2">
               <button type="button" data-view="search" class="tab-button">Search</button>
+              <button type="button" id="kraska-tab" data-view="kraska" class="tab-button">Browse</button>
               <button type="button" data-view="queue" class="tab-button">Queue</button>
               <button type="button" id="providers-tab" data-view="providers" class="tab-button hidden">Providers</button>
               <button type="button" id="settings-tab" data-view="settings" class="tab-button hidden">Settings</button>
@@ -102,6 +103,27 @@
                   <div id="search-loading" class="hidden text-sm text-brand-300">Searching providers…</div>
                   <div id="search-errors" class="hidden space-y-2"></div>
                 </div>
+              </div>
+            </section>
+
+            <section id="kraska-view" data-panel="kraska" class="panel hidden">
+              <div class="rounded-2xl border border-slate-800/70 bg-slate-900/60 p-6 shadow">
+                <div class="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <h3 class="text-lg font-semibold text-slate-100">Browse Stream-Cinema</h3>
+                    <p class="text-sm text-slate-400">Navigate Kra.sk menus and queue playable items.</p>
+                  </div>
+                  <div class="flex flex-wrap items-center gap-2">
+                    <button id="kraska-home-btn" type="button" class="rounded-lg border border-slate-700/60 bg-slate-950/60 px-3 py-1.5 text-xs font-semibold text-slate-200 transition hover:border-brand-400/60 hover:text-brand-200">Home</button>
+                    <button id="kraska-back-btn" type="button" class="rounded-lg border border-slate-700/60 bg-slate-950/60 px-3 py-1.5 text-xs font-semibold text-slate-200 transition hover:border-brand-400/60 hover:text-brand-200 disabled:opacity-40" disabled>Back</button>
+                    <button id="kraska-queue-btn" type="button" class="hidden rounded-lg bg-emerald-500 px-4 py-2 text-xs font-semibold text-white shadow transition hover:bg-emerald-400 focus:outline-none focus:ring focus:ring-emerald-500/40">Add selected to queue</button>
+                  </div>
+                </div>
+                <div id="kraska-breadcrumbs" class="mb-3 flex flex-wrap items-center gap-2 text-sm text-slate-400"></div>
+                <div id="kraska-error" class="hidden mb-3 rounded-lg border border-rose-500/40 bg-rose-500/10 p-3 text-sm text-rose-200"></div>
+                <div id="kraska-loading" class="hidden text-sm text-brand-300">Loading menu…</div>
+                <div id="kraska-empty" class="hidden text-sm text-slate-500">No items available here.</div>
+                <ul id="kraska-list" class="flex flex-col gap-3"></ul>
               </div>
             </section>
 

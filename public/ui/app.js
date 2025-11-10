@@ -45,6 +45,7 @@ import { state, els, API, providerCatalog } from './modules/context.js';
 		wireLogin();
 		wireDashboard();
 		wireSearch();
+		wireKraska();
 		applyDefaultSearchLimit();
 		wireJobs();
 		wireAdmin();
@@ -175,6 +176,65 @@ function wireSearch() {
 	});
 
 	els.queueSelectionBtn?.addEventListener('click', queueSelectedResults);
+}
+
+function wireKraska() {
+	els.kraskaBackBtn?.addEventListener('click', () => {
+		if (state.kraska.trail.length <= 1) {
+			return;
+		}
+		const previousIndex = state.kraska.trail.length - 2;
+		const crumb = state.kraska.trail[previousIndex];
+		if (!crumb) {
+			return;
+		}
+		loadKraskaMenu(crumb.path, { trailIndex: previousIndex });
+	});
+
+	els.kraskaHomeBtn?.addEventListener('click', () => {
+		loadKraskaMenu('/', { resetTrail: true });
+	});
+
+	els.kraskaQueueBtn?.addEventListener('click', queueSelectedKraska);
+
+	els.kraskaList?.addEventListener('click', (event) => {
+		const target = event.target;
+		if (!(target instanceof HTMLElement)) return;
+		const trigger = target.closest('[data-kraska-open]');
+		if (!(trigger instanceof HTMLElement)) return;
+		const index = Number.parseInt(trigger.dataset.kraskaOpen ?? '', 10);
+		if (!Number.isFinite(index)) return;
+		const item = state.kraska.items[index];
+		if (!item || !item.path) return;
+		event.preventDefault();
+		loadKraskaMenu(item.path, { pushTrail: true, label: item.label ?? null });
+	});
+
+	els.kraskaList?.addEventListener('change', (event) => {
+		const target = event.target;
+		if (!(target instanceof HTMLInputElement)) return;
+		if (!target.matches('input[type="checkbox"][data-kraska-select]')) return;
+		const cacheKey = target.dataset.kraskaSelect;
+		if (!cacheKey) return;
+		if (target.checked) {
+			state.kraska.selected.add(cacheKey);
+		} else {
+			state.kraska.selected.delete(cacheKey);
+		}
+		updateKraskaQueueButton();
+	});
+
+	els.kraskaBreadcrumbs?.addEventListener('click', (event) => {
+		const target = event.target;
+		if (!(target instanceof HTMLElement)) return;
+		const button = target.closest('[data-kraska-crumb]');
+		if (!(button instanceof HTMLElement)) return;
+		const index = Number.parseInt(button.dataset.kraskaCrumb ?? '', 10);
+		if (!Number.isFinite(index)) return;
+		const crumb = state.kraska.trail[index];
+		if (!crumb) return;
+		loadKraskaMenu(crumb.path, { trailIndex: index });
+	});
 }
 
 function wireAdmin() {
@@ -545,9 +605,17 @@ function resetState() {
 	state.settingsSaving = false;
 	state.settingsError = null;
 	state.defaultSearchLimit = 50;
+	state.kraska.currentPath = '/';
+	state.kraska.title = null;
+	state.kraska.items = [];
+	state.kraska.trail = [];
+	state.kraska.selected = new Set();
+	state.kraska.loading = false;
+	state.kraska.error = null;
 	applyDefaultSearchLimit(true);
 	renderProviders();
 	renderSearchResults();
+	renderKraskaMenu();
 	renderJobs();
 	renderStorage();
 	renderStats();
@@ -712,6 +780,308 @@ function switchView(view) {
 	if (view === 'settings' && state.isAdmin) {
 		loadSettings(true);
 	}
+
+	if (view === 'kraska') {
+		ensureKraskaLoaded();
+	}
+}
+
+function ensureKraskaLoaded() {
+	if (!state.user) return;
+	if (!state.kraska.items || state.kraska.items.length === 0) {
+		if (!state.kraska.loading) {
+			loadKraskaMenu('/', { resetTrail: true });
+		}
+	} else {
+		renderKraskaMenu();
+	}
+}
+
+async function loadKraskaMenu(path = '/', options = {}) {
+	if (!state.user) {
+		showToast('Please sign in first.', 'warning');
+		return;
+	}
+	const normalizedPath = normalizeKraskaPath(path);
+	const { pushTrail = false, resetTrail = false, trailIndex = null, label = null } = options;
+	if (state.kraska.loading) {
+		return;
+	}
+	state.kraska.loading = true;
+	state.kraska.error = null;
+	if (!pushTrail) {
+		state.kraska.selected.clear();
+	}
+	renderKraskaMenu();
+
+	try {
+		const params = new URLSearchParams({ path: normalizedPath });
+		const response = await fetchJson(`${API.kraskaMenu}?${params.toString()}`);
+		const payload = response?.data ?? {};
+		const items = Array.isArray(payload?.items) ? payload.items : [];
+		state.kraska.currentPath = payload?.path ?? normalizedPath;
+		state.kraska.title = payload?.title ?? null;
+		state.kraska.items = normalizeKraskaItems(items);
+		state.kraska.selected = new Set();
+
+		const resolvedLabel = state.kraska.title ?? label ?? (state.kraska.currentPath === '/' ? 'Browse' : state.kraska.currentPath);
+		const previousTrail = Array.isArray(state.kraska.trail) ? state.kraska.trail.slice() : [];
+		let nextTrail;
+		if (resetTrail || previousTrail.length === 0) {
+			nextTrail = [{ path: state.kraska.currentPath, label: resolvedLabel }];
+		} else if (typeof trailIndex === 'number' && Number.isFinite(trailIndex) && trailIndex >= 0) {
+			nextTrail = previousTrail.slice(0, trailIndex + 1);
+			nextTrail[nextTrail.length - 1] = { path: state.kraska.currentPath, label: resolvedLabel };
+		} else if (pushTrail) {
+			nextTrail = previousTrail.concat({ path: state.kraska.currentPath, label: resolvedLabel });
+		} else {
+			nextTrail = previousTrail.slice();
+			nextTrail[nextTrail.length - 1] = { path: state.kraska.currentPath, label: resolvedLabel };
+		}
+		state.kraska.trail = nextTrail;
+	} catch (error) {
+		state.kraska.error = messageFromError(error);
+		state.kraska.items = [];
+	} finally {
+		state.kraska.loading = false;
+		renderKraskaMenu();
+	}
+}
+
+function renderKraskaMenu() {
+	if (els.kraskaLoading) {
+		toggleElement(els.kraskaLoading, state.kraska.loading);
+	}
+
+	if (els.kraskaError) {
+		if (state.kraska.error) {
+			els.kraskaError.textContent = state.kraska.error;
+			toggleElement(els.kraskaError, true);
+		} else {
+			toggleElement(els.kraskaError, false);
+		}
+	}
+
+	const hasItems = Array.isArray(state.kraska.items) && state.kraska.items.length > 0;
+	if (els.kraskaEmpty) {
+		const showEmpty = !state.kraska.loading && !state.kraska.error && !hasItems;
+		toggleElement(els.kraskaEmpty, showEmpty);
+	}
+
+	if (els.kraskaList) {
+		if (!hasItems) {
+			els.kraskaList.innerHTML = '';
+		} else {
+			els.kraskaList.innerHTML = state.kraska.items
+				.map((item, index) => renderKraskaItem(item, index))
+				.join('');
+		}
+	}
+
+	renderKraskaBreadcrumbs();
+	updateKraskaBackButton();
+	updateKraskaQueueButton();
+	if (els.kraskaHomeBtn) {
+		const atRoot = normalizeKraskaPath(state.kraska.currentPath ?? '/') === '/';
+		els.kraskaHomeBtn.toggleAttribute('disabled', atRoot);
+	}
+}
+
+function renderKraskaItem(item, index) {
+	if (item.type === 'dir' && item.path) {
+		const summary = item.summary ? `<p class="text-sm text-slate-400 line-clamp-2">${escapeHtml(item.summary)}</p>` : '';
+		return `
+			<li class="group rounded-2xl border border-slate-800/70 bg-slate-900/60 transition hover:border-brand-500/40">
+				<button type="button" data-kraska-open="${index}" class="flex w-full items-start gap-4 p-4 text-left">
+					<div class="flex h-10 w-10 items-center justify-center rounded-full bg-slate-800/60 text-brand-300">📁</div>
+					<div class="flex-1 space-y-1">
+						<div class="flex flex-wrap items-center gap-2">
+							<h4 class="text-lg font-semibold text-slate-100">${escapeHtml(item.label ?? 'Untitled')}</h4>
+							<span class="rounded-full border border-slate-800/70 bg-slate-950/60 px-2 py-0.5 text-xs uppercase tracking-wide text-slate-300">Directory</span>
+						</div>
+						${summary}
+					</div>
+					<span class="text-xs text-slate-500">Open</span>
+				</button>
+			</li>
+		`;
+	}
+
+	const checked = state.kraska.selected.has(item.cacheKey) ? 'checked' : '';
+	const summary = item.summary ? `<p class="text-sm text-slate-400 line-clamp-2">${escapeHtml(item.summary)}</p>` : '';
+	const metaSection = renderKraskaMetaChips(item);
+	const thumb = item.art?.thumb ?? item.art?.poster ?? item.art?.fanart ?? null;
+	const thumbnail = thumb ? `<img src="${escapeHtml(thumb)}" alt="${escapeHtml(item.label ?? 'Artwork')}" class="h-16 w-16 rounded-lg object-cover" loading="lazy" />` : '';
+
+	return `
+		<li class="group rounded-2xl border border-slate-800/70 bg-slate-900/60 p-4 transition hover:border-brand-500/40">
+			<div class="flex items-start gap-4">
+				<input type="checkbox" class="mt-1 h-5 w-5 rounded border-slate-700 bg-slate-950 text-brand-500 focus:ring-brand-500/60" data-kraska-select="${escapeHtml(item.cacheKey)}" ${checked} />
+				<div class="flex-1 space-y-2">
+					<div class="flex flex-wrap items-center gap-2">
+						<h4 class="text-lg font-semibold text-slate-100">${escapeHtml(item.label ?? 'Untitled')}</h4>
+						<span class="rounded-full border border-slate-800/70 bg-slate-950/60 px-2 py-0.5 text-xs uppercase tracking-wide text-slate-300">${escapeHtml(item.type ?? 'video')}</span>
+						${item.meta?.quality ? `<span class="text-xs text-slate-400">${escapeHtml(String(item.meta.quality))}</span>` : ''}
+					</div>
+					${summary}
+					${metaSection}
+				</div>
+				${thumbnail}
+			</div>
+		</li>
+	`;
+}
+
+function renderKraskaMetaChips(item) {
+	const meta = item.meta ?? {};
+	const chips = [];
+	if (meta.quality && !chips.includes(meta.quality)) chips.push(String(meta.quality));
+	const duration = Number(meta.duration_seconds);
+	if (Number.isFinite(duration) && duration > 0) chips.push(formatDuration(duration));
+	if (Array.isArray(meta.languages) && meta.languages.length > 0) chips.push(meta.languages.join('/'));
+	const year = Number(meta.year);
+	if (Number.isFinite(year) && year > 0) chips.push(String(Math.trunc(year)));
+	const rating = Number(meta.rating);
+	if (Number.isFinite(rating)) chips.push(`${rating.toFixed(1)}★`);
+	const audioParts = [];
+	if (meta.audio_codec) audioParts.push(String(meta.audio_codec));
+	if (meta.audio_channels) audioParts.push(formatAudioChannels(meta.audio_channels));
+	if (audioParts.length > 0) chips.push(audioParts.join(' '));
+	if (meta.fps) chips.push(`${meta.fps} fps`);
+
+	if (chips.length === 0) {
+		return '';
+	}
+
+	return `
+		<div class="flex flex-wrap gap-2 text-xs text-slate-300">
+			${chips
+				.map((chip) => `<span class="rounded-full border border-slate-800/60 bg-slate-900/40 px-2 py-0.5">${escapeHtml(String(chip))}</span>`)
+				.join('')}
+		</div>
+	`;
+}
+
+function renderKraskaBreadcrumbs() {
+	if (!els.kraskaBreadcrumbs) return;
+	if (!Array.isArray(state.kraska.trail) || state.kraska.trail.length === 0) {
+		els.kraskaBreadcrumbs.innerHTML = '';
+		return;
+	}
+	const fragments = state.kraska.trail.map((crumb, index) => {
+		const label = crumb?.label ?? crumb?.path ?? 'Browse';
+		if (index === state.kraska.trail.length - 1) {
+			return `<span class="text-slate-100">${escapeHtml(label)}</span>`;
+		}
+		return `<button type="button" data-kraska-crumb="${index}" class="text-sm font-medium text-brand-300 hover:text-brand-200">${escapeHtml(label)}</button>`;
+	});
+	els.kraskaBreadcrumbs.innerHTML = fragments.join('<span class="text-slate-600">/</span>');
+}
+
+function updateKraskaBackButton() {
+	if (!els.kraskaBackBtn) return;
+	const canGoBack = Array.isArray(state.kraska.trail) && state.kraska.trail.length > 1;
+	els.kraskaBackBtn.toggleAttribute('disabled', !canGoBack);
+}
+
+function updateKraskaQueueButton() {
+	if (!els.kraskaQueueBtn) return;
+	const count = state.kraska.selected.size;
+	const label = `Add ${count} item${count === 1 ? '' : 's'} to queue`;
+	if (count > 0) {
+		els.kraskaQueueBtn.textContent = label;
+	}
+	toggleElement(els.kraskaQueueBtn, count > 0, 'inline-flex');
+	if (count === 0) {
+		els.kraskaQueueBtn.textContent = 'Add selected to queue';
+	}
+	if (state.isQueueSubmitting) {
+		els.kraskaQueueBtn.setAttribute('disabled', 'true');
+	} else {
+		els.kraskaQueueBtn.removeAttribute('disabled');
+	}
+}
+
+async function queueSelectedKraska() {
+	if (state.isQueueSubmitting || state.kraska.selected.size === 0) return;
+	const itemsPayload = Array.from(state.kraska.selected)
+		.map((cacheKey) => state.kraska.items.find((item) => item.cacheKey === cacheKey))
+		.filter((item) => item && item.ident)
+		.map((item) => ({
+			provider: item.provider ?? 'kraska',
+			external_id: item.ident,
+			title: item.label ?? item.summary ?? 'Untitled',
+		}));
+
+	if (itemsPayload.length === 0) {
+		showToast('Nothing to queue.', 'warning');
+		state.kraska.selected.clear();
+		updateKraskaQueueButton();
+		return;
+	}
+
+	state.isQueueSubmitting = true;
+	els.kraskaQueueBtn?.setAttribute('disabled', 'true');
+
+	try {
+		await fetchJson(API.queue, {
+			method: 'POST',
+			body: JSON.stringify({ items: itemsPayload }),
+		});
+		showToast(`Queued ${itemsPayload.length} item${itemsPayload.length === 1 ? '' : 's'}.`, 'success');
+		state.kraska.selected.clear();
+		updateKraskaQueueButton();
+		loadJobs();
+	} catch (error) {
+		showToast(messageFromError(error), 'error');
+	} finally {
+		state.isQueueSubmitting = false;
+		els.kraskaQueueBtn?.removeAttribute('disabled');
+	}
+}
+
+function normalizeKraskaItems(items) {
+	return items.map((item, index) => {
+		const type = typeof item?.type === 'string' ? item.type.toLowerCase() : 'unknown';
+		const provider = typeof item?.provider === 'string' ? item.provider : 'kraska';
+		const ident = typeof item?.ident === 'string' ? item.ident : null;
+		const path = typeof item?.path === 'string' ? item.path : null;
+		const cacheKey = ident ? `${provider}:${ident}` : `${provider}:${type}:${index}`;
+		return {
+			...item,
+			type,
+			provider,
+			ident,
+			path,
+			cacheKey,
+			meta: typeof item?.meta === 'object' && item.meta !== null ? item.meta : {},
+			art: typeof item?.art === 'object' && item.art !== null ? item.art : {},
+			selectable: Boolean(item?.selectable ?? ident),
+		};
+	});
+}
+
+function normalizeKraskaPath(value) {
+	if (typeof value !== 'string') return '/';
+	let path = value.trim();
+	if (path === '') return '/';
+	if (path.startsWith('http://') || path.startsWith('https://')) {
+		try {
+			const url = new URL(path);
+			path = url.pathname + (url.search ?? '');
+		} catch (error) {
+			path = '/';
+		}
+	}
+	if (!path.startsWith('/')) {
+		path = '/' + path;
+	}
+	const parts = path.split('?');
+	const cleanPath = parts[0].replace(/\/{2,}/g, '/');
+	if (parts.length > 1 && parts[1] !== '') {
+		return `${cleanPath}?${parts.slice(1).join('?')}`;
+	}
+	return cleanPath;
 }
 
 async function loadProviders() {
