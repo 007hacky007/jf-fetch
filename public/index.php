@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use App\Infra\Assets;
 use App\Infra\Config;
 
 $autoload = __DIR__ . '/../vendor/autoload.php';
@@ -59,7 +60,18 @@ if (str_starts_with($path, '/api/')) {
 $uiRoot = realpath(__DIR__ . '/ui');
 
 if ($path === '/' || $path === '/index.html') {
-    require $uiRoot . '/index.html';
+    $indexPath = $uiRoot . '/index.html';
+    $assetVersion = Assets::version();
+    $html = @file_get_contents($indexPath);
+    if ($html !== false) {
+    $escapedVersion = htmlspecialchars($assetVersion, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+        $html = str_replace('__APP_ASSET_VERSION__', $escapedVersion, $html);
+        header('Content-Type: text/html; charset=utf-8');
+        echo $html;
+        exit;
+    }
+
+    require $indexPath;
     exit;
 }
 
@@ -242,6 +254,12 @@ function dispatchApiRoute(string $apiRoot, array $segments): bool
 
             if (count($segments) === 2 && $segments[1] === 'health' && $method === 'GET') {
                 require $apiRoot . '/system/health.php';
+
+                return true;
+            }
+
+            if (count($segments) === 2 && $segments[1] === 'version' && $method === 'GET') {
+                require $apiRoot . '/system/version.php';
 
                 return true;
             }

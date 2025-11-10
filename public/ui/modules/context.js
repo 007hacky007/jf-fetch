@@ -137,6 +137,8 @@ export const els = {
 	auditRefreshBtn: document.getElementById('audit-refresh-btn'),
 	toastContainer: document.getElementById('toast-container'),
 	modal: document.getElementById('modal'),
+	assetVersionBanner: document.getElementById('asset-version-banner'),
+	assetVersionReload: document.getElementById('asset-version-reload'),
 };
 
 export const API = {
@@ -170,6 +172,7 @@ export const API = {
 	audit: '/api/audit',
 	settings: '/api/settings',
 	jellyfinLibraries: '/api/system/jellyfin_libraries',
+	systemVersion: '/api/system/version',
 };
 
 export const providerCatalog = {

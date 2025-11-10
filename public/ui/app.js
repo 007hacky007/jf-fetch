@@ -38,10 +38,17 @@ import { state, els, API, providerCatalog } from './modules/context.js';
 		stopJobStream,
 	} from './modules/jobs.js';
 
+	const BUILD_VERSION = typeof window.APP_BUILD_VERSION === 'string' && window.APP_BUILD_VERSION !== '' ? window.APP_BUILD_VERSION : null;
+	const ASSET_VERSION_CHECK_INTERVAL = 5 * 60 * 1000;
+	let assetVersionPollId = null;
+	let assetVersionVisibilityHandler = null;
+	let assetVersionMismatch = false;
+
 	injectUtilityStyles();
 	init();
 
 	function init() {
+		initAssetVersionWatcher();
 		wireLogin();
 		wireDashboard();
 		wireSearch();
@@ -53,6 +60,95 @@ import { state, els, API, providerCatalog } from './modules/context.js';
 		wireStorage();
 		showLogin();
 		hydrateSession();
+	}
+
+	function initAssetVersionWatcher() {
+		if (!BUILD_VERSION || !els.assetVersionBanner) {
+			return;
+		}
+
+		const runCheck = async () => {
+			if (assetVersionMismatch) {
+				return;
+			}
+			try {
+				const response = await fetchJson(`${API.systemVersion}?t=${Date.now()}`, {
+					cache: 'no-store',
+					headers: {
+						Pragma: 'no-cache',
+						'Cache-Control': 'no-cache',
+					},
+				});
+				const serverVersion = extractAssetVersion(response);
+				if (!serverVersion) {
+					return;
+				}
+				if (serverVersion !== BUILD_VERSION) {
+					assetVersionMismatch = true;
+					showAssetVersionBanner(serverVersion);
+				}
+			} catch (error) {
+				console.debug('Asset version check failed', error);
+			}
+		};
+
+		if (els.assetVersionReload) {
+			els.assetVersionReload.addEventListener('click', triggerHardReload);
+		}
+
+		void runCheck();
+
+		if (assetVersionPollId !== null) {
+			window.clearInterval(assetVersionPollId);
+		}
+		assetVersionPollId = window.setInterval(runCheck, ASSET_VERSION_CHECK_INTERVAL);
+
+		if (!assetVersionVisibilityHandler) {
+			assetVersionVisibilityHandler = () => {
+				if (!document.hidden) {
+					void runCheck();
+				}
+			};
+			document.addEventListener('visibilitychange', assetVersionVisibilityHandler);
+		}
+	}
+
+	function extractAssetVersion(payload) {
+		if (!payload) return null;
+		if (typeof payload === 'string') {
+			const trimmed = payload.trim();
+			return trimmed !== '' ? trimmed : null;
+		}
+		if (typeof payload.asset_version === 'string' && payload.asset_version !== '') {
+			return payload.asset_version;
+		}
+		if (payload.data && typeof payload.data.asset_version === 'string' && payload.data.asset_version !== '') {
+			return payload.data.asset_version;
+		}
+		return null;
+	}
+
+	function showAssetVersionBanner(serverVersion) {
+		const banner = els.assetVersionBanner;
+		if (!banner) return;
+		const messageEl = banner.querySelector('[data-version-message]');
+		const serverLabel = serverVersion ? ` (server v${serverVersion})` : '';
+		const clientLabel = BUILD_VERSION ? `You are running v${BUILD_VERSION}.` : '';
+		const message = `New interface update available${serverLabel}. ${clientLabel} Reload to stay in sync.`.trim();
+		if (messageEl) {
+			messageEl.textContent = message;
+		}
+		toggleElement(banner, true, 'flex');
+	}
+
+	function triggerHardReload() {
+		try {
+			const url = new URL(window.location.href);
+			url.searchParams.set('_reload', String(Date.now()));
+			window.location.replace(url.toString());
+		} catch (error) {
+			window.location.reload();
+		}
 	}
 
 	function wireLogin() {
