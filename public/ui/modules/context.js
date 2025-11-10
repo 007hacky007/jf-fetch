@@ -41,6 +41,7 @@ export const state = {
 		selected: new Set(),
 		loading: false,
 		error: null,
+		cache: null,
 	},
 };
 
@@ -80,6 +81,8 @@ export const els = {
 	kraskaBackBtn: document.getElementById('kraska-back-btn'),
 	kraskaHomeBtn: document.getElementById('kraska-home-btn'),
 	kraskaQueueBtn: document.getElementById('kraska-queue-btn'),
+	kraskaRefreshBtn: document.getElementById('kraska-refresh-btn'),
+	kraskaCacheMeta: document.getElementById('kraska-cache-meta'),
 	jobsList: document.getElementById('jobs-list'),
 	jobsEmpty: document.getElementById('jobs-empty'),
 	jobsSummary: document.getElementById('jobs-summary'),

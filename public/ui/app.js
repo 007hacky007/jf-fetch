@@ -197,6 +197,12 @@ function wireKraska() {
 
 	els.kraskaQueueBtn?.addEventListener('click', queueSelectedKraska);
 
+	els.kraskaRefreshBtn?.addEventListener('click', () => {
+		if (state.kraska.loading) return;
+		const targetPath = typeof state.kraska.currentPath === 'string' ? state.kraska.currentPath : '/';
+		loadKraskaMenu(targetPath, { forceRefresh: true });
+	});
+
 	els.kraskaList?.addEventListener('click', (event) => {
 		const target = event.target;
 		if (!(target instanceof HTMLElement)) return;
@@ -612,6 +618,7 @@ function resetState() {
 	state.kraska.selected = new Set();
 	state.kraska.loading = false;
 	state.kraska.error = null;
+	state.kraska.cache = null;
 	applyDefaultSearchLimit(true);
 	renderProviders();
 	renderSearchResults();
@@ -803,12 +810,13 @@ async function loadKraskaMenu(path = '/', options = {}) {
 		return;
 	}
 	const normalizedPath = normalizeKraskaPath(path);
-	const { pushTrail = false, resetTrail = false, trailIndex = null, label = null } = options;
+	const { pushTrail = false, resetTrail = false, trailIndex = null, label = null, forceRefresh = false } = options;
 	if (state.kraska.loading) {
 		return;
 	}
 	state.kraska.loading = true;
 	state.kraska.error = null;
+	state.kraska.cache = null;
 	if (!pushTrail) {
 		state.kraska.selected.clear();
 	}
@@ -816,13 +824,21 @@ async function loadKraskaMenu(path = '/', options = {}) {
 
 	try {
 		const params = new URLSearchParams({ path: normalizedPath });
+		if (forceRefresh) {
+			params.set('refresh', '1');
+		}
 		const response = await fetchJson(`${API.kraskaMenu}?${params.toString()}`);
 		const payload = response?.data ?? {};
+		const cacheMeta = normalizeKraskaCacheMeta(response?.cache ?? null);
 		const items = Array.isArray(payload?.items) ? payload.items : [];
 		state.kraska.currentPath = payload?.path ?? normalizedPath;
 		state.kraska.title = payload?.title ?? null;
 		state.kraska.items = normalizeKraskaItems(items);
 		state.kraska.selected = new Set();
+		state.kraska.cache = cacheMeta;
+		if (forceRefresh) {
+			showToast('Menu refreshed from source.', 'success');
+		}
 
 		const resolvedLabel = state.kraska.title ?? label ?? (state.kraska.currentPath === '/' ? 'Browse' : state.kraska.currentPath);
 		const previousTrail = Array.isArray(state.kraska.trail) ? state.kraska.trail.slice() : [];
@@ -842,6 +858,7 @@ async function loadKraskaMenu(path = '/', options = {}) {
 	} catch (error) {
 		state.kraska.error = messageFromError(error);
 		state.kraska.items = [];
+		state.kraska.cache = null;
 	} finally {
 		state.kraska.loading = false;
 		renderKraskaMenu();
@@ -881,6 +898,8 @@ function renderKraskaMenu() {
 	renderKraskaBreadcrumbs();
 	updateKraskaBackButton();
 	updateKraskaQueueButton();
+	renderKraskaCacheMeta();
+	updateKraskaRefreshButton();
 	if (els.kraskaHomeBtn) {
 		const atRoot = normalizeKraskaPath(state.kraska.currentPath ?? '/') === '/';
 		els.kraskaHomeBtn.toggleAttribute('disabled', atRoot);
@@ -932,6 +951,37 @@ function renderKraskaItem(item, index) {
 	`;
 }
 
+function formatKraskaCacheAge(meta) {
+	if (!meta) return '';
+	if (meta.fetched_at) {
+		return formatRelativeTime(meta.fetched_at);
+	}
+	if (meta.age_seconds !== null && meta.age_seconds !== undefined) {
+		return formatCacheAgeFromSeconds(meta.age_seconds);
+	}
+	return '';
+}
+
+function formatCacheAgeFromSeconds(seconds) {
+	const value = Number(seconds);
+	if (!Number.isFinite(value) || value <= 0) {
+		return 'Just now';
+	}
+	if (value < 60) {
+		return `${Math.round(value)} s ago`;
+	}
+	if (value < 3600) {
+		const mins = Math.round(value / 60);
+		return `${mins} min${mins === 1 ? '' : 's'} ago`;
+	}
+	if (value < 86400) {
+		const hours = Math.round(value / 3600);
+		return `${hours} h${hours === 1 ? '' : 's'} ago`;
+	}
+	const days = Math.round(value / 86400);
+	return `${days} d${days === 1 ? '' : 's'} ago`;
+}
+
 function renderKraskaMetaChips(item) {
 	const meta = item.meta ?? {};
 	const chips = [];
@@ -976,6 +1026,54 @@ function renderKraskaBreadcrumbs() {
 		return `<button type="button" data-kraska-crumb="${index}" class="text-sm font-medium text-brand-300 hover:text-brand-200">${escapeHtml(label)}</button>`;
 	});
 	els.kraskaBreadcrumbs.innerHTML = fragments.join('<span class="text-slate-600">/</span>');
+}
+
+function normalizeKraskaCacheMeta(meta) {
+	if (!meta || typeof meta !== 'object') {
+		return null;
+	}
+
+	const fetchedAtRaw = typeof meta.fetched_at === 'string' ? meta.fetched_at.trim() : '';
+	const ageRaw = Number(meta.age_seconds ?? null);
+	const ttlRaw = Number(meta.ttl_seconds ?? null);
+
+	return {
+		hit: Boolean(meta.hit),
+		fetched_at: fetchedAtRaw !== '' ? fetchedAtRaw : null,
+		age_seconds: Number.isFinite(ageRaw) && ageRaw >= 0 ? ageRaw : null,
+		ttl_seconds: Number.isFinite(ttlRaw) && ttlRaw > 0 ? ttlRaw : null,
+		refreshable: meta.refreshable !== undefined ? Boolean(meta.refreshable) : null,
+	};
+}
+
+function renderKraskaCacheMeta() {
+	if (!els.kraskaCacheMeta) return;
+	const meta = state.kraska.cache;
+	if (!meta) {
+		els.kraskaCacheMeta.textContent = '';
+		delete els.kraskaCacheMeta.dataset.variant;
+		toggleElement(els.kraskaCacheMeta, false);
+		return;
+	}
+
+	const variant = meta.hit ? 'cached' : 'fresh';
+	const label = meta.hit ? 'Cached result' : 'Fresh result';
+	const ageLabel = formatKraskaCacheAge(meta);
+	const text = ageLabel ? `${label} • ${ageLabel}` : label;
+	els.kraskaCacheMeta.textContent = text;
+	els.kraskaCacheMeta.dataset.variant = variant;
+	toggleElement(els.kraskaCacheMeta, true, 'inline-flex');
+}
+
+function updateKraskaRefreshButton() {
+	if (!els.kraskaRefreshBtn) return;
+	if (state.kraska.loading) {
+		els.kraskaRefreshBtn.setAttribute('disabled', 'true');
+		els.kraskaRefreshBtn.classList.add('opacity-60', 'cursor-not-allowed');
+	} else {
+		els.kraskaRefreshBtn.removeAttribute('disabled');
+		els.kraskaRefreshBtn.classList.remove('opacity-60', 'cursor-not-allowed');
+	}
 }
 
 function updateKraskaBackButton() {
