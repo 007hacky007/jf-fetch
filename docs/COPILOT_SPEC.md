@@ -369,17 +369,16 @@ repo/
 ## 16) Jellyfin Import — Moving Files & Refresh
 
 * **Where the worker gets the file path:** from `aria2.tellStatus().files[0].path` (absolute path).
-* **Move** from `/downloads/...` (staging) to `/library/...` according to category (Movies/TV) and your naming template.
+* **Move** from `/downloads/...` (staging) to `/library/...` according to detected type (Movie/Series) and your naming template.
 * **Recommended naming & folders** for best detection:
 
   * **Movies**
 
-    * `.../Movies/TITLE (YEAR).ext` **or**
-    * `.../Movies/TITLE (YEAR)/TITLE (YEAR).ext`
+    * `.../Movie/T/TITLE (YEAR).ext` — second-level folder is the movie's uppercase initial (`0-9` for digit-leading titles, `Other` as fallback).
       Reference: [https://jellyfin.org/docs/general/server/media/movies/](https://jellyfin.org/docs/general/server/media/movies/)
-  * **TV Shows**
+  * **Series**
 
-    * `.../TV/SHOW NAME/Season 01/SHOW NAME - S01E01 - EPISODE TITLE.ext`
+    * `.../Series/SHOW NAME/Season 01/SHOW NAME - S01E01 - EPISODE TITLE.ext`
       Reference: [https://jellyfin.org/docs/general/server/media/shows/](https://jellyfin.org/docs/general/server/media/shows/)
 * **Permissions:** ensure the container user can **write** `/library`. Use `PUID/PGID` and optionally umask `002`. After move, set consistent perms (`0644` file, `0755` dirs).
 * **Trigger a scan:** after every successful move, **globally refresh**:

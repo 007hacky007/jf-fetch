@@ -31,7 +31,7 @@ final class Jellyfin
         $libraryRoot = (string) Config::get('paths.library');
         self::ensureDirectory($libraryRoot);
 
-        $placement = self::inferMediaPlacement($job, $sourcePath, $libraryRoot);
+    $placement = self::inferMediaPlacement($job, $sourcePath);
 
         $targetDir = rtrim($libraryRoot, '/');
         foreach ($placement['directories'] as $segment) {
@@ -114,28 +114,13 @@ final class Jellyfin
     }
 
     /**
-     * Maps a job category to a subdirectory inside the Jellyfin library tree.
-     */
-    private static function mapCategoryDirectory(string $libraryRoot, string $category): string
-    {
-        $normalized = strtolower(trim($category));
-        $normalized = $normalized !== '' ? $normalized : 'misc';
-
-        return match ($normalized) {
-            'movies' => $libraryRoot . '/Movies',
-            'tv', 'tv shows', 'tvshows' => $libraryRoot . '/TV',
-            default => $libraryRoot . '/' . self::sanitizeSegment($category === '' ? 'Misc' : $category),
-        };
-    }
-
-    /**
      * Determines the directory structure and filename for a downloaded item.
      *
      * @param array<string, mixed> $job
      *
      * @return array{directories: array<int, string>, filename: string}
      */
-    private static function inferMediaPlacement(array $job, string $sourcePath, string $libraryRoot): array
+    private static function inferMediaPlacement(array $job, string $sourcePath): array
     {
         $categoryRaw = (string) ($job['category'] ?? '');
         $titleRaw = trim((string) ($job['title'] ?? ''));
@@ -148,18 +133,18 @@ final class Jellyfin
 
         $episodeMatch = [];
         $hasEpisodeMarker = preg_match('/S(\d{1,2})E(\d{1,2})/i', $titleRaw, $episodeMatch) === 1;
-        $tvLike = str_contains($normalizedCategory, 'tv') || str_contains($normalizedCategory, 'series') || $hasEpisodeMarker;
-        $movieLike = str_contains($normalizedCategory, 'movie');
 
-        if ($tvLike) {
-            return self::buildEpisodePlacement($titleRaw, $episodeMatch, $extension);
+        $seriesLike = $hasEpisodeMarker
+            || str_contains($normalizedCategory, 'tv')
+            || str_contains($normalizedCategory, 'series')
+            || str_contains($normalizedCategory, 'season')
+            || str_contains($normalizedCategory, 'episode');
+
+        if ($seriesLike) {
+            return self::buildSeriesPlacement($titleRaw, $episodeMatch, $extension);
         }
 
-        if ($movieLike) {
-            return self::buildMoviePlacement($titleRaw, $extension);
-        }
-
-        return self::buildGenericPlacement($libraryRoot, $categoryRaw, $sourcePath, $extension);
+        return self::buildMoviePlacement($titleRaw, $extension);
     }
 
     /**
@@ -178,29 +163,27 @@ final class Jellyfin
             $baseTitle = 'Movie';
         }
 
-        $folderName = $baseTitle;
         $fileNameBase = $baseTitle;
 
         if ($year !== null) {
-            $folderName = sprintf('%s (%d)', $baseTitle, $year);
-            $fileNameBase = $folderName;
+            $fileNameBase = sprintf('%s (%d)', $baseTitle, $year);
         }
 
-        $folderSegment = self::sanitizeSegment($folderName, 'Movies');
+        $initialSegment = self::sanitizeSegment(self::determineMovieInitial($baseTitle), 'Other');
         $fileName = self::sanitizeFilename($fileNameBase, $extension);
 
         return [
-            'directories' => ['Movies', $folderSegment],
+            'directories' => ['Movie', $initialSegment],
             'filename' => $fileName,
         ];
     }
 
     /**
-     * Builds placement rules for episodic (TV) items.
+     * Builds placement rules for episodic (series) items.
      *
      * @param array<int, string> $episodeMatch
      */
-    private static function buildEpisodePlacement(string $title, array $episodeMatch, string $extension): array
+    private static function buildSeriesPlacement(string $title, array $episodeMatch, string $extension): array
     {
         $season = isset($episodeMatch[1]) ? (int) $episodeMatch[1] : 1;
         $episode = isset($episodeMatch[2]) ? (int) $episodeMatch[2] : 1;
@@ -215,7 +198,7 @@ final class Jellyfin
             $episodeTitle = trim((string) ($match[1] ?? ''));
         }
 
-        $showSegment = self::sanitizeSegment($showName, 'Series');
+    $showSegment = self::sanitizeSegment($showName, 'Unknown Series');
         $seasonSegment = self::sanitizeSegment(sprintf('Season %02d', $season), sprintf('Season %02d', $season));
 
         $filenameParts = [
@@ -236,38 +219,7 @@ final class Jellyfin
         $filename = self::sanitizeFilename($filenameBase, $extension);
 
         return [
-            'directories' => ['TV', $showSegment, $seasonSegment],
-            'filename' => $filename,
-        ];
-    }
-
-    /**
-     * Builds placement rules for items without explicit media categorisation.
-     */
-    private static function buildGenericPlacement(string $libraryRoot, string $category, string $sourcePath, string $extension): array
-    {
-        $categoryDir = self::mapCategoryDirectory($libraryRoot, $category);
-        $relative = trim(str_replace($libraryRoot, '', $categoryDir), '/');
-        $segments = $relative !== '' ? explode('/', $relative) : [];
-
-        if ($segments === []) {
-            $segments[] = self::sanitizeSegment($category === '' ? 'Misc' : $category);
-        } else {
-            $segments = array_map(static fn (string $segment): string => self::sanitizeSegment($segment), $segments);
-        }
-
-        $baseName = pathinfo($sourcePath, PATHINFO_FILENAME);
-        if ($baseName === '') {
-            $baseName = basename($sourcePath);
-            if ($extension !== '') {
-                $baseName = preg_replace('/\.' . preg_quote($extension, '/') . '$/i', '', $baseName) ?? $baseName;
-            }
-        }
-
-        $filename = self::sanitizeFilename($baseName, $extension);
-
-        return [
-            'directories' => $segments,
+            'directories' => ['Series', $showSegment, $seasonSegment],
             'filename' => $filename,
         ];
     }
@@ -336,5 +288,23 @@ final class Jellyfin
         }
 
         return $base . '.' . ltrim($extension, '.');
+    }
+
+    /**
+     * Determines the appropriate second-level directory name for movies based on their initial.
+     */
+    private static function determineMovieInitial(string $title): string
+    {
+        $normalized = self::sanitizeLabel($title, 'Movie');
+
+        if (preg_match('/[A-Za-z]/', $normalized, $match) === 1) {
+            return strtoupper($match[0]);
+        }
+
+        if (preg_match('/\d/', $normalized) === 1) {
+            return '0-9';
+        }
+
+        return 'Other';
     }
 }

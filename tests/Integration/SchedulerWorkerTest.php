@@ -73,7 +73,7 @@ final class SchedulerWorkerTest extends TestCase
         $this->assertNotNull($finalRow['final_path']);
         $this->assertFileExists($finalRow['final_path']);
         $this->assertFileDoesNotExist($downloadPath);
-        $this->assertStringContainsString('/Movies/Test Movie (2024)/Test Movie (2024).mkv', $finalRow['final_path']);
+    $this->assertStringContainsString('/Movie/T/Test Movie (2024).mkv', $finalRow['final_path']);
 
         $auditCount = (int) $this->pdo->query("SELECT COUNT(*) FROM audit_log WHERE action = 'job.completed'")->fetchColumn();
         $this->assertSame(1, $auditCount);
