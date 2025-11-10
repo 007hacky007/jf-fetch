@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use App\Infra\Auth;
+use App\Infra\Config;
 
 header('Content-Type: application/json');
 
@@ -22,4 +23,14 @@ if ($user === null) {
     exit;
 }
 
-echo json_encode(['user' => $user]);
+$defaultLimit = (int) Config::get('app.default_search_limit');
+if ($defaultLimit <= 0) {
+    $defaultLimit = 50;
+}
+
+echo json_encode([
+    'user' => $user,
+    'defaults' => [
+        'search_limit' => $defaultLimit,
+    ],
+]);

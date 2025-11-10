@@ -45,6 +45,7 @@ import { state, els, API, providerCatalog } from './modules/context.js';
 		wireLogin();
 		wireDashboard();
 		wireSearch();
+		applyDefaultSearchLimit();
 		wireJobs();
 		wireAdmin();
 		wireSettings();
@@ -108,6 +109,14 @@ import { state, els, API, providerCatalog } from './modules/context.js';
 	}
 
 function wireSearch() {
+	if (els.searchLimit instanceof HTMLInputElement) {
+		const markEdited = () => {
+			els.searchLimit.dataset.userEdited = '1';
+		};
+		els.searchLimit.addEventListener('input', markEdited);
+		els.searchLimit.addEventListener('change', markEdited);
+	}
+
 	els.searchForm?.addEventListener('submit', async (event) => {
 		event.preventDefault();
 		if (!state.user) {
@@ -121,7 +130,12 @@ function wireSearch() {
 			return;
 		}
 
-		const limit = Number.parseInt(els.searchLimit?.value ?? '50', 10) || 50;
+		const fallbackLimit = Number.isFinite(state.defaultSearchLimit) && state.defaultSearchLimit > 0 ? state.defaultSearchLimit : 50;
+		const parsedLimit = Number.parseInt(els.searchLimit?.value ?? String(fallbackLimit), 10) || fallbackLimit;
+		const limit = Math.max(1, Math.min(100, parsedLimit));
+		if (els.searchLimit instanceof HTMLInputElement) {
+			els.searchLimit.value = String(limit);
+		}
 		const providers = getSelectedProviders();
 
 		toggleElement(els.searchErrors, false);
@@ -296,6 +310,7 @@ async function loadSettings(force = false) {
 	try {
 		const response = await fetchJson(API.settings);
 		state.settings = response?.data ?? null;
+		setDefaultSearchLimit(response?.data?.app?.default_search_limit);
 	} catch (error) {
 		state.settings = null;
 		state.settingsError = messageFromError(error);
@@ -345,6 +360,7 @@ async function saveSettings() {
 			body: JSON.stringify(payload),
 		});
 		state.settings = response?.data ?? state.settings;
+		setDefaultSearchLimit(state.settings?.app?.default_search_limit, { force: true });
 		showToast('Settings saved.', 'success');
 	} catch (error) {
 		const message = messageFromError(error);
@@ -453,6 +469,9 @@ function showLogin() {
 async function hydrateSession() {
 	try {
 		const response = await fetchJson(API.session);
+		if (response?.defaults && Object.prototype.hasOwnProperty.call(response.defaults, 'search_limit')) {
+			setDefaultSearchLimit(response.defaults.search_limit, { force: true });
+		}
 		const user = response?.user;
 		if (user) {
 			setUser(user);
@@ -522,6 +541,8 @@ function resetState() {
 	state.settingsLoading = false;
 	state.settingsSaving = false;
 	state.settingsError = null;
+	state.defaultSearchLimit = 50;
+	applyDefaultSearchLimit(true);
 	renderProviders();
 	renderSearchResults();
 	renderJobs();
@@ -591,6 +612,31 @@ function renderStats() {
 	push('Total download time', formatDuration(stats.total_download_duration_seconds));
 	push('Avg download time', stats.avg_download_duration_seconds !== null ? formatDuration(stats.avg_download_duration_seconds) : '—');
 	container.innerHTML = `<div class="grid gap-1">${rows.join('')}</div>`;
+}
+
+function setDefaultSearchLimit(limit, { force = false } = {}) {
+	const numeric = Number.parseInt(String(limit ?? ''), 10);
+	if (!Number.isFinite(numeric) || numeric <= 0) {
+		return;
+	}
+	if (!force && state.defaultSearchLimit === numeric) {
+		return;
+	}
+	state.defaultSearchLimit = numeric;
+	applyDefaultSearchLimit(force);
+}
+
+function applyDefaultSearchLimit(force = false) {
+	const input = els.searchLimit;
+	if (!(input instanceof HTMLInputElement)) {
+		return;
+	}
+	const defaultLimit = Number.isFinite(state.defaultSearchLimit) && state.defaultSearchLimit > 0 ? state.defaultSearchLimit : 50;
+	if (!force && input.dataset.userEdited === '1') {
+		return;
+	}
+	input.value = String(defaultLimit);
+	delete input.dataset.userEdited;
 }
 
 function setUser(user) {
