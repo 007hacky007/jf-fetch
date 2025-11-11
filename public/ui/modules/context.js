@@ -18,6 +18,7 @@ export const state = {
 	usersLoading: false,
 	storageIntervalId: null,
 	jobNotifications: new Set(),
+	providerAlerts: [],
 	auditLogs: [],
 	auditCursor: null,
 	auditLoading: false,
@@ -119,6 +120,7 @@ export const els = {
 	settingsMinFreeSpace: document.getElementById('settings-min-free-space'),
 	settingsDefaultSearchLimit: document.getElementById('settings-default-search-limit'),
 	settingsKraskaMenuCacheTtl: document.getElementById('settings-kraska-menu-cache-ttl'),
+	settingsKraskaBackoffMinutes: document.getElementById('settings-kraska-backoff-minutes'),
 	settingsKraskaDebugEnabled: document.getElementById('settings-kraska-debug-enabled'),
 	settingsDownloadsPath: document.getElementById('settings-downloads-path'),
 	settingsLibraryPath: document.getElementById('settings-library-path'),
@@ -144,6 +146,7 @@ export const els = {
 	modal: document.getElementById('modal'),
 	assetVersionBanner: document.getElementById('asset-version-banner'),
 	assetVersionReload: document.getElementById('asset-version-reload'),
+	globalWarningBanner: document.getElementById('global-warning-banner'),
 };
 
 export const API = {

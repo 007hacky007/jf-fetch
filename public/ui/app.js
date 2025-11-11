@@ -36,6 +36,7 @@ import { state, els, API, providerCatalog } from './modules/context.js';
 		renderJobs,
 		startJobStream,
 		stopJobStream,
+		applyProviderAlerts,
 	} from './modules/jobs.js';
 
 	const BUILD_VERSION = typeof window.APP_BUILD_VERSION === 'string' && window.APP_BUILD_VERSION !== '' ? window.APP_BUILD_VERSION : null;
@@ -542,6 +543,15 @@ async function saveSettings() {
 	const kraskaTtlDays = Number.isNaN(parsedKraskaTtl) ? null : Math.max(parsedKraskaTtl, 0);
 	const kraskaTtlSeconds = kraskaTtlDays === null ? null : Math.round(kraskaTtlDays * 86400);
 
+	const kraskaBackoffRaw = (els.settingsKraskaBackoffMinutes?.value ?? '').trim();
+	let kraskaBackoffSeconds = null;
+	if (kraskaBackoffRaw !== '') {
+		const parsedBackoff = Number.parseFloat(kraskaBackoffRaw);
+		if (!Number.isNaN(parsedBackoff)) {
+			kraskaBackoffSeconds = Math.round(parsedBackoff * 60);
+		}
+	}
+
 	const kraskaDebugEnabled = els.settingsKraskaDebugEnabled?.checked ?? false;
 
 	const payload = {
@@ -563,6 +573,7 @@ async function saveSettings() {
 		providers: {
 			kraska_menu_cache_ttl_seconds: kraskaTtlSeconds,
 			kraska_debug_enabled: kraskaDebugEnabled,
+			kraska_error_backoff_seconds: kraskaBackoffSeconds,
 		},
 	};
 
@@ -620,6 +631,7 @@ function renderSettings() {
 		els.settingsMinFreeSpace,
 		els.settingsDefaultSearchLimit,
 		els.settingsKraskaMenuCacheTtl,
+		els.settingsKraskaBackoffMinutes,
 		els.settingsKraskaDebugEnabled,
 		els.settingsDownloadsPath,
 		els.settingsLibraryPath,
@@ -662,6 +674,16 @@ function renderSettings() {
 				const ttlDays = ttlSeconds / 86400;
 				const rounded = Math.round(ttlDays * 10) / 10;
 				els.settingsKraskaMenuCacheTtl.value = Number.isFinite(rounded) ? String(rounded) : '';
+			}
+		}
+		if (els.settingsKraskaBackoffMinutes) {
+			const backoffSeconds = settings?.providers?.kraska_error_backoff_seconds;
+			if (backoffSeconds === null || backoffSeconds === undefined) {
+				els.settingsKraskaBackoffMinutes.value = '';
+			} else {
+				const minutes = backoffSeconds / 60;
+				const roundedMinutes = Math.round(minutes * 10) / 10;
+				els.settingsKraskaBackoffMinutes.value = Number.isFinite(roundedMinutes) ? String(roundedMinutes) : '';
 			}
 		}
 		if (els.settingsKraskaDebugEnabled) {
@@ -764,6 +786,7 @@ function resetState() {
 	state.isAdmin = false;
 	state.usersLoading = false;
 	state.jobNotifications.clear();
+	state.providerAlerts = [];
 	state.storageIntervalId = null;
 	state.auditLogs = [];
 	state.auditCursor = null;
@@ -787,6 +810,7 @@ function resetState() {
 	state.kraska.variantsError = null;
 	state.kraska.variantQueueing = false;
 	applyDefaultSearchLimit(true);
+	applyProviderAlerts([]);
 	renderProviders();
 	renderSearchResults();
 	renderKraskaMenu();

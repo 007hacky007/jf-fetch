@@ -16,6 +16,49 @@ import {
 
 let dragSourceId = null;
 
+export function applyProviderAlerts(alerts) {
+	state.providerAlerts = Array.isArray(alerts) ? alerts.filter(Boolean) : [];
+	renderProviderAlerts();
+}
+
+function renderProviderAlerts() {
+	const banner = els.globalWarningBanner;
+	if (!banner) return;
+
+	const alerts = Array.isArray(state.providerAlerts) ? state.providerAlerts : [];
+	if (alerts.length === 0) {
+		banner.innerHTML = '';
+		toggleElement(banner, false);
+		return;
+	}
+
+	const content = alerts.map((alert, index) => renderProviderAlert(alert, index)).join('');
+	banner.innerHTML = content;
+	toggleElement(banner, true, 'flex');
+}
+
+function renderProviderAlert(alert, index) {
+	if (!alert || typeof alert !== 'object') {
+		return '';
+	}
+
+	const baseClass = 'text-sm leading-relaxed text-amber-100';
+	const separatorClass = index === 0 ? '' : ' mt-2 pt-2 border-t border-amber-500/25';
+	const providerLabel = escapeHtml(String(alert.provider_label ?? alert.provider ?? 'Provider'));
+	const message = escapeHtml(String(alert.message ?? 'Provider temporarily paused.'));
+	const retrySeconds = Math.max(0, Number(alert.retry_in_seconds ?? alert.retry_after_seconds ?? 0));
+	const retryLabel = retrySeconds > 0 ? `Retrying in ${formatDuration(retrySeconds)}` : 'Retrying shortly';
+	const retryText = escapeHtml(retryLabel);
+	const retryDate = alert.retry_at ? parseIsoDate(alert.retry_at) : null;
+	const retryTime = retryDate ? ` (~${escapeHtml(retryDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }))})` : '';
+	const jobTitle = alert.job && typeof alert.job === 'object' && alert.job.title
+		? escapeHtml(String(alert.job.title))
+		: null;
+	const jobLine = jobTitle ? `<span class="block text-xs text-amber-200/80">Last failing job: ${jobTitle}</span>` : '';
+
+	return `<div class="${baseClass}${separatorClass}"><strong class="font-semibold">${providerLabel}</strong> – ${message} ${retryText}${retryTime}.${jobLine ? ` ${jobLine}` : ''}</div>`;
+}
+
 export function wireJobs() {
 	els.jobsMineToggle?.addEventListener('change', () => {
 		state.showMyJobs = Boolean(els.jobsMineToggle?.checked);
@@ -90,6 +133,7 @@ async function loadJobsPage(initial = false) {
 		const response = await fetchJson(`${API.jobsList}?${params.toString()}`);
 		const jobs = Array.isArray(response?.data) ? response.data : [];
 		const meta = response?.meta || {};
+		applyProviderAlerts(Array.isArray(meta.provider_backoff) ? meta.provider_backoff : []);
 		const normalized = jobs.map((j) => normalizeJob(j)).filter(Boolean);
 		state.jobs.push(...normalized);
 		sortJobsInPlace(state.jobs); // ensure stable ordering relative to client expectations

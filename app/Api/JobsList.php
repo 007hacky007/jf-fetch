@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Api;
 
 use App\Domain\Jobs;
+use App\Infra\ProviderBackoff;
 
 final class JobsList
 {
@@ -28,18 +29,25 @@ final class JobsList
             $data = array_map(static fn(array $row): array => Jobs::format($row, $isAdmin), $paged['rows']);
             $total = $paged['total'];
             $hasMore = $offset + $limit < $total;
+            $meta = [
+                'total' => $total,
+                'limit' => $limit,
+                'offset' => $offset,
+                'has_more' => $hasMore,
+                'provider_backoff' => ProviderBackoff::active(),
+            ];
             return [
                 'data' => $data,
-                'meta' => [
-                    'total' => $total,
-                    'limit' => $limit,
-                    'offset' => $offset,
-                    'has_more' => $hasMore,
-                ],
+                'meta' => $meta,
             ];
         }
         $rows = Jobs::list($isAdmin, $userId, $mineOnly);
         $data = array_map(static fn(array $row): array => Jobs::format($row, $isAdmin), $rows);
-        return ['data' => $data];
+        return [
+            'data' => $data,
+            'meta' => [
+                'provider_backoff' => ProviderBackoff::active(),
+            ],
+        ];
     }
 }

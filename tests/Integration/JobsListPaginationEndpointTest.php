@@ -48,6 +48,8 @@ final class JobsListPaginationEndpointTest extends TestCase
         $this->assertSame(3, $payload['meta']['limit']);
         $this->assertSame(0, $payload['meta']['offset']);
         $this->assertTrue($payload['meta']['has_more']);
+        $this->assertArrayHasKey('provider_backoff', $payload['meta']);
+        $this->assertIsArray($payload['meta']['provider_backoff']);
         $this->assertCount(3, $payload['data']);
     }
 
@@ -59,6 +61,8 @@ final class JobsListPaginationEndpointTest extends TestCase
         $ids2 = array_map(static fn($r) => (int) $r['id'], $p2['data']);
         $this->assertSame([], array_intersect($ids1, $ids2));
         $this->assertFalse($p2['meta']['has_more']);
+        $this->assertArrayHasKey('provider_backoff', $p2['meta']);
+        $this->assertIsArray($p2['meta']['provider_backoff']);
     }
 
     // Removed execute helper: using JobsList::handle directly to avoid emitting output during tests.

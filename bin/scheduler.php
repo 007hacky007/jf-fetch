@@ -6,12 +6,14 @@ use App\Download\Aria2Client;
 use App\Infra\Audit;
 use App\Infra\Config;
 use App\Infra\Db;
+use App\Infra\ProviderBackoff;
 use App\Infra\ProviderSecrets;
 use App\Providers\VideoProvider;
 use App\Providers\WebshareProvider;
 use App\Providers\RateLimitDeferredException;
 use App\Providers\KraSkApiException;
 use App\Providers\KraSkProvider;
+use App\Providers\ProviderBackoffException;
 use App\Support\Clock;
 use App\Support\LogRotation;
 
@@ -100,6 +102,7 @@ function runSchedulerLoop(string $root): void
 	while (true) {
 		try {
 			Config::reloadOverrides();
+			synchronizeProviderBackoff($providerThrottleUntil);
 
 			// Requeue orphan 'starting' jobs that never obtained an aria2_gid (e.g. provider init exception earlier)
 			$requeued = cleanupOrphanStartingJobs();
@@ -164,6 +167,49 @@ function runSchedulerLoop(string $root): void
 					$exception->getRetryAfterSeconds()
 				));
 				continue;
+			} catch (ProviderBackoffException $exception) {
+				returnJobToQueue((int) $job['id']);
+				$retrySeconds = $exception->getRetryAfterSeconds();
+				$retryAt = time() + $retrySeconds;
+				$providerThrottleUntil[$providerId] = $retryAt;
+				$context = $exception->getContext();
+				$providerLabel = isset($providerRow['name']) && $providerRow['name'] !== ''
+					? (string) $providerRow['name']
+					: ucfirst($exception->getProviderKey());
+				ProviderBackoff::set(
+					$exception->getProviderKey(),
+					$retryAt,
+					[
+						'provider_label' => $providerLabel,
+						'reason' => $context['reason'] ?? 'temporary_failure',
+						'message' => $exception->getMessage(),
+						'retry_after_seconds' => $retrySeconds,
+						'job' => [
+							'id' => (int) $job['id'],
+							'title' => $job['title'] ?? null,
+							'external_id' => $job['external_id'] ?? null,
+						],
+						'error' => [
+							'status_code' => $context['status_code'] ?? null,
+							'endpoint' => $context['endpoint'] ?? null,
+							'response_preview' => $context['response_preview'] ?? null,
+						],
+					]
+				);
+				Audit::record((int) $job['user_id'], 'job.deferred.backoff', 'job', (int) $job['id'], [
+					'provider_key' => $exception->getProviderKey(),
+					'retry_after_seconds' => $retrySeconds,
+					'retry_at' => gmdate('c', $retryAt),
+					'message' => $exception->getMessage(),
+				]);
+				logInfo(sprintf(
+					'%s temporarily unavailable (%s). Will retry job %d in approximately %d seconds.',
+					$providerLabel,
+					$exception->getMessage(),
+					(int) $job['id'],
+					$retrySeconds
+				));
+				continue;
 			}
 		} catch (Throwable $exception) {
 			logError('Scheduler error: ' . $exception->getMessage());
@@ -225,6 +271,7 @@ function claimNextJob(array $skipProviderIds = []): ?array
 
 function processJob(array $job, array $providerRow, Aria2Client $aria2): void
 {
+	$providerKey = isset($providerRow['key']) ? (string) $providerRow['key'] : '';
 	try {
 		$provider = buildProvider($providerRow);
 		$resolved = $provider->resolveDownloadUrl((string) $job['external_id']);
@@ -264,10 +311,34 @@ function processJob(array $job, array $providerRow, Aria2Client $aria2): void
 			'source_url' => $uris[0] ?? null,
 		]);
 
+		if ($providerKey !== '') {
+			ProviderBackoff::clear($providerKey);
+		}
+
 		logInfo(sprintf('Job %d enqueued with aria2 gid %s.', $job['id'], $gid));
 	} catch (RateLimitDeferredException $exception) {
 		throw $exception;
 	} catch (Throwable $exception) {
+		if ($providerKey === 'kraska' && $exception instanceof KraSkApiException && isKraskaInvalidIdent($exception)) {
+			$backoffSeconds = getKraskaBackoffSeconds();
+			$responsePreview = $exception->getResponseBody();
+			throw new ProviderBackoffException(
+				'kraska',
+				(int) $job['provider_id'],
+				$backoffSeconds,
+				'Kra.sk API returned invalid ident (HTTP 400).',
+				[
+					'reason' => 'invalid_ident',
+					'status_code' => $exception->getStatusCode(),
+					'endpoint' => $exception->getEndpoint(),
+					'response_preview' => is_string($responsePreview) ? substr($responsePreview, 0, 500) : null,
+					'job_external_id' => $job['external_id'] ?? null,
+					'job_title' => $job['title'] ?? null,
+				],
+				$exception
+			);
+		}
+
 		$details = [
 			'exception_class' => $exception::class,
 			'job_external_id' => $job['external_id'] ?? null,
@@ -275,7 +346,7 @@ function processJob(array $job, array $providerRow, Aria2Client $aria2): void
 			'provider_key' => $providerRow['key'] ?? null,
 		];
 
-		if ($provider instanceof KraSkProvider) {
+		if (isset($provider) && $provider instanceof KraSkProvider) {
 			$details['provider'] = 'kraska';
 
 			if ($exception instanceof KraSkApiException) {
@@ -479,6 +550,102 @@ function returnJobToQueue(int $jobId): void
 			'id' => $jobId,
 		]
 	);
+}
+
+/**
+ * Aligns the in-memory throttle state with persisted provider backoff windows.
+ *
+ * @param array<int, int> $providerThrottleUntil
+ */
+function synchronizeProviderBackoff(array &$providerThrottleUntil): void
+{
+	$active = ProviderBackoff::active();
+	if ($active === []) {
+		return;
+	}
+
+	$now = time();
+	foreach ($active as $entry) {
+		$providerKey = $entry['provider'] ?? null;
+		$retryAt = isset($entry['retry_at_unix']) ? (int) $entry['retry_at_unix'] : null;
+		if (!is_string($providerKey) || $providerKey === '' || $retryAt === null) {
+			continue;
+		}
+		if ($retryAt <= $now) {
+			ProviderBackoff::clear($providerKey);
+			continue;
+		}
+
+		$providerId = resolveProviderIdByKey($providerKey);
+		if ($providerId === null) {
+			continue;
+		}
+
+		if (!isset($providerThrottleUntil[$providerId]) || $providerThrottleUntil[$providerId] < $retryAt) {
+			$providerThrottleUntil[$providerId] = $retryAt;
+		}
+	}
+}
+
+function resolveProviderIdByKey(string $providerKey): ?int
+{
+	static $cache = [];
+
+	if (array_key_exists($providerKey, $cache)) {
+		return $cache[$providerKey];
+	}
+
+	try {
+		$statement = Db::run('SELECT id FROM providers WHERE key = :key LIMIT 1', ['key' => $providerKey]);
+		$value = $statement->fetchColumn();
+		$cache[$providerKey] = is_numeric($value) ? (int) $value : null;
+	} catch (Throwable) {
+		$cache[$providerKey] = null;
+	}
+
+	return $cache[$providerKey];
+}
+
+function getKraskaBackoffSeconds(): int
+{
+	try {
+		$value = (int) Config::get('providers.kraska_error_backoff_seconds');
+	} catch (Throwable) {
+		$value = 300;
+	}
+
+	if ($value <= 0) {
+		$value = 300;
+	}
+
+	return max(60, $value);
+}
+
+function isKraskaInvalidIdent(KraSkApiException $exception): bool
+{
+	if ($exception->getStatusCode() !== 400) {
+		return false;
+	}
+
+	$body = $exception->getResponseBody();
+	if (is_string($body) && $body !== '') {
+		if (stripos($body, 'invalid ident') !== false) {
+			return true;
+		}
+		$decoded = json_decode($body, true);
+		if (is_array($decoded)) {
+			$errorCode = $decoded['error'] ?? $decoded['code'] ?? null;
+			if (is_numeric($errorCode) && (int) $errorCode === 1207) {
+				return true;
+			}
+			$message = $decoded['msg'] ?? $decoded['message'] ?? null;
+			if (is_string($message) && stripos($message, 'invalid ident') !== false) {
+				return true;
+			}
+		}
+	}
+
+	return false;
 }
 
 /**
