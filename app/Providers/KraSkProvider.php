@@ -1949,7 +1949,7 @@ class KraSkProvider implements VideoProvider, StatusCapableProvider
      * @param array<string,mixed> $payload
      * @return array<string,mixed>
      */
-    private function apiPost(string $endpoint, array $payload, bool $requireAuth, bool $attachSession = true, bool $mutateSession = false): array
+    private function apiPost(string $endpoint, array $payload, bool $requireAuth, bool $attachSession = true, bool $mutateSession = false, int $attempt = 0): array
     {
         if ($requireAuth && $this->sessionId === null) {
             // Establish session first (will invoke adapter for login if provided)
@@ -1969,13 +1969,15 @@ class KraSkProvider implements VideoProvider, StatusCapableProvider
         if ($requireAuth) {
             $this->ensureSession();
         }
+
+        $payloadToSend = $payload;
         if ($attachSession && $this->sessionId !== null) {
             // In Kodi plugin they add session_id alongside provided payload keys.
-            $payload['session_id'] = $this->sessionId;
+            $payloadToSend['session_id'] = $this->sessionId;
         }
 
         $url = self::API_BASE . $endpoint;
-        $body = json_encode($payload, JSON_THROW_ON_ERROR);
+        $body = json_encode($payloadToSend, JSON_THROW_ON_ERROR);
         
         $debug = ($this->config['debug'] ?? false) === true;
         if ($debug) {
@@ -2007,12 +2009,29 @@ class KraSkProvider implements VideoProvider, StatusCapableProvider
         if ($raw === false) {
             throw new RuntimeException('Kra.sk HTTP error: ' . $err);
         }
+        if ($code === 401 && $requireAuth && $attempt < 1) {
+            if ($debug) {
+                $this->debugLog('[API POST] Received 401 for ' . $endpoint . ', attempting session refresh');
+            }
+            $this->sessionId = null;
+            try {
+                $this->ensureSession();
+            } catch (\Throwable $loginError) {
+                // If re-login fails, fall through to exception handling below.
+                if ($debug) {
+                    $this->debugLog('[API POST] Session refresh failed: ' . $loginError->getMessage());
+                }
+            }
+
+            return $this->apiPost($endpoint, $payload, $requireAuth, $attachSession, $mutateSession, $attempt + 1);
+        }
+
         if ($code < 200 || $code >= 300) {
             $responseSnippet = is_string($raw) ? substr($raw, 0, 1000) : null;
             throw new KraSkApiException(
                 $code,
                 $endpoint,
-                $this->sanitizePayloadForLogging($payload),
+                $this->sanitizePayloadForLogging($payloadToSend),
                 $url,
                 $responseSnippet
             );
@@ -2054,6 +2073,31 @@ class KraSkProvider implements VideoProvider, StatusCapableProvider
 
             if (is_numeric($errorCode)) {
                 $errorCode = (int) $errorCode;
+            }
+
+            $shouldRetryAuth = false;
+
+            if (is_numeric($errorCode) && (int) $errorCode === 401) {
+                $shouldRetryAuth = true;
+            } elseif (is_string($errorCode) && stripos($errorCode, 'auth') !== false) {
+                $shouldRetryAuth = true;
+            } elseif (is_string($message) && stripos($message, 'auth') !== false) {
+                $shouldRetryAuth = true;
+            }
+
+            if ($requireAuth && $shouldRetryAuth && $attempt < 1) {
+                if ($debug) {
+                    $this->debugLog('[API POST] Kra.sk reported authorization error for ' . $endpoint . ', retrying after login');
+                }
+                try {
+                    $this->ensureSession();
+                } catch (\Throwable $loginError) {
+                    if ($debug) {
+                        $this->debugLog('[API POST] Re-login failed after error response: ' . $loginError->getMessage());
+                    }
+                }
+
+                return $this->apiPost($endpoint, $payload, $requireAuth, $attachSession, $mutateSession, $attempt + 1);
             }
 
             $messageParts = [];
