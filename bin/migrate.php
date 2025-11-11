@@ -5,8 +5,6 @@ declare(strict_types=1);
 
 use App\Infra\Config;
 use App\Infra\Db;
-use PDO;
-use RuntimeException;
 
 $root = dirname(__DIR__);
 $autoload = $root . '/vendor/autoload.php';

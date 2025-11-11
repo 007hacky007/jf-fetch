@@ -382,8 +382,7 @@ final class Jobs
 
     /**
      * Aggregates statistics about jobs and downloaded data.
-     * NOTE: File size aggregation reads file sizes from disk for completed jobs.
-     * For large installations consider persisting file_size_bytes in the database.
+     * Uses SQL SUM to aggregate file sizes from the database for optimal performance.
      *
      * @return array<string, scalar|null>
      */
@@ -421,20 +420,18 @@ final class Jobs
         $distinctUsers = $distinctStmt->fetchColumn();
         $stats['distinct_users'] = $distinctUsers !== false ? (int) $distinctUsers : 0;
 
-        // Aggregate bytes & duration for completed jobs
-        $completedSql = "SELECT id, final_path, created_at, updated_at FROM jobs $where" . ($where ? ' AND' : ' WHERE') . " status = 'completed'";
-        $completedStmt = Db::run($completedSql, $params);
-        $completedRows = $completedStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
-        $totalBytes = 0;
+        // Aggregate bytes using SQL SUM for completed jobs
+        $bytesSql = "SELECT COALESCE(SUM(file_size_bytes), 0) FROM jobs $where" . ($where ? ' AND' : ' WHERE') . " status = 'completed'";
+        $bytesStmt = Db::run($bytesSql, $params);
+        $totalBytes = $bytesStmt->fetchColumn();
+        $stats['total_bytes_downloaded'] = $totalBytes !== false ? (int) $totalBytes : 0;
+
+        // Aggregate duration for completed jobs
+        $durationSql = "SELECT created_at, updated_at FROM jobs $where" . ($where ? ' AND' : ' WHERE') . " status = 'completed'";
+        $durationStmt = Db::run($durationSql, $params);
+        $durationRows = $durationStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
         $totalDurationSeconds = 0;
-        foreach ($completedRows as $row) {
-            $path = is_string($row['final_path'] ?? null) ? (string) $row['final_path'] : null;
-            if ($path && is_file($path)) {
-                $size = @filesize($path);
-                if (is_int($size) && $size > 0) {
-                    $totalBytes += $size;
-                }
-            }
+        foreach ($durationRows as $row) {
             try {
                 $createdTs = strtotime((string) $row['created_at']);
                 $updatedTs = strtotime((string) $row['updated_at']);
@@ -445,7 +442,6 @@ final class Jobs
                 // ignore parse errors
             }
         }
-        $stats['total_bytes_downloaded'] = $totalBytes;
         $stats['total_download_duration_seconds'] = $totalDurationSeconds;
 
         // Average download duration (seconds) for completed jobs

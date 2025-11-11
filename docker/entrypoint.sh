@@ -8,4 +8,7 @@ mkdir -p "$LOG_DIR"
 
 php "$ROOT_DIR/bin/migrate.php"
 
+# Backfill file sizes for existing completed jobs (idempotent, safe to run multiple times)
+php "$ROOT_DIR/bin/backfill_file_sizes.php"
+
 exec "$@"

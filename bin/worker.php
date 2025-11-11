@@ -252,10 +252,14 @@ function handleCompletion(array $job, array $status): void
 		$sourcePath = (string) $files[0]['path'];
 		$finalPath = Jellyfin::moveDownloadToLibrary($job, $sourcePath);
 
+		// Capture file size after move
+		$fileSize = file_exists($finalPath) ? filesize($finalPath) : null;
+
 		Db::run(
-			"UPDATE jobs SET status = 'completed', progress = 100, speed_bps = NULL, eta_seconds = NULL, final_path = :final_path, tmp_path = NULL, updated_at = :updated_at WHERE id = :id",
+			"UPDATE jobs SET status = 'completed', progress = 100, speed_bps = NULL, eta_seconds = NULL, final_path = :final_path, file_size_bytes = :file_size_bytes, tmp_path = NULL, updated_at = :updated_at WHERE id = :id",
 			[
 				'final_path' => $finalPath,
+				'file_size_bytes' => $fileSize,
 				'updated_at' => Clock::nowString(),
 				'id' => $job['id'],
 			]
