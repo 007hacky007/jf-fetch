@@ -43,7 +43,7 @@ final class SchedulerWorkerTest extends TestCase
         $downloadPath = $this->downloadsDir . '/incoming-file.mkv';
         file_put_contents($downloadPath, 'video-bytes');
 
-    $now = '2024-01-02T00:00:00.000000+00:00';
+        $now = '2024-01-02T00:00:00.000000+00:00';
         $stmt = $this->pdo->prepare('UPDATE jobs SET status = :status, aria2_gid = :gid, tmp_path = :tmp, category = :category, title = :title, updated_at = :updated WHERE id = :id');
         $stmt->execute([
             'status' => 'downloading',
@@ -73,7 +73,7 @@ final class SchedulerWorkerTest extends TestCase
         $this->assertNotNull($finalRow['final_path']);
         $this->assertFileExists($finalRow['final_path']);
         $this->assertFileDoesNotExist($downloadPath);
-    $this->assertStringContainsString('/Movie/T/Test Movie (2024).mkv', $finalRow['final_path']);
+        $this->assertStringContainsString('/Movies/Test Movie (2024)/Test Movie (2024).mkv', $finalRow['final_path']);
 
         $auditCount = (int) $this->pdo->query("SELECT COUNT(*) FROM audit_log WHERE action = 'job.completed'")->fetchColumn();
         $this->assertSame(1, $auditCount);
@@ -122,6 +122,7 @@ final class SchedulerWorkerTest extends TestCase
             tmp_path TEXT,
             final_path TEXT,
             error_text TEXT,
+            metadata_json TEXT,
             created_at TEXT,
             updated_at TEXT
         )');
@@ -148,13 +149,13 @@ final class SchedulerWorkerTest extends TestCase
 
     private function seedData(PDO $pdo): void
     {
-    $now = '2024-01-01T00:00:00.000000+00:00';
+        $now = '2024-01-01T00:00:00.000000+00:00';
 
         $pdo->exec("INSERT INTO users (id, name, email, password_hash, role, created_at, updated_at) VALUES (1, 'Admin', 'admin@example.com', 'hash', 'admin', '$now', '$now')");
         $pdo->exec("INSERT INTO providers (id, key, name, enabled, config_json, created_at, updated_at) VALUES (1, 'webshare', 'Webshare', 1, '', '$now', '$now')");
 
-        $pdo->exec("INSERT INTO jobs (id, user_id, provider_id, external_id, title, status, priority, position, category, source_url, aria2_gid, progress, speed_bps, eta_seconds, tmp_path, final_path, error_text, created_at, updated_at)
-            VALUES (1, 1, 1, 'ext-1', 'Seed Job', 'queued', 100, 1, 'Movies', '', NULL, 0, NULL, NULL, NULL, NULL, NULL, '$now', '$now')");
+        $pdo->exec("INSERT INTO jobs (id, user_id, provider_id, external_id, title, status, priority, position, category, source_url, aria2_gid, progress, speed_bps, eta_seconds, tmp_path, final_path, error_text, metadata_json, created_at, updated_at)
+            VALUES (1, 1, 1, 'ext-1', 'Seed Job', 'queued', 100, 1, 'Movies', '', NULL, 0, NULL, NULL, NULL, NULL, NULL, NULL, '$now', '$now')");
     }
 
     private function loadDaemons(): void

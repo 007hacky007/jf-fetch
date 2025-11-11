@@ -101,6 +101,7 @@ final class JobsListPaginationEndpointTest extends TestCase
             tmp_path TEXT NULL,
             final_path TEXT NULL,
             error_text TEXT NULL,
+            metadata_json TEXT NULL,
             deleted_at TEXT NULL,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
@@ -127,7 +128,7 @@ final class JobsListPaginationEndpointTest extends TestCase
 
         $pdo->exec("INSERT INTO providers (id, key, name) VALUES (1, 'webshare', 'Webshare')");
 
-        $jobStmt = $pdo->prepare('INSERT INTO jobs (id,user_id,provider_id,external_id,title,source_url,category,status,progress,speed_bps,eta_seconds,priority,position,aria2_gid,tmp_path,final_path,error_text,deleted_at,created_at,updated_at) VALUES (:id,:user_id,:provider_id,:external_id,:title,:source_url,:category,:status,:progress,:speed_bps,:eta_seconds,:priority,:position,:aria2_gid,:tmp_path,:final_path,:error_text,:deleted_at,:created_at,:updated_at)');
+    $jobStmt = $pdo->prepare('INSERT INTO jobs (id,user_id,provider_id,external_id,title,source_url,category,status,progress,speed_bps,eta_seconds,priority,position,aria2_gid,tmp_path,final_path,error_text,metadata_json,deleted_at,created_at,updated_at) VALUES (:id,:user_id,:provider_id,:external_id,:title,:source_url,:category,:status,:progress,:speed_bps,:eta_seconds,:priority,:position,:aria2_gid,:tmp_path,:final_path,:error_text,:metadata_json,:deleted_at,:created_at,:updated_at)');
 
         for ($i = 1; $i <= 6; $i++) {
             $created = $now->modify('+' . $i . ' minutes');
@@ -149,6 +150,7 @@ final class JobsListPaginationEndpointTest extends TestCase
                 'tmp_path' => null,
                 'final_path' => null,
                 'error_text' => null,
+                'metadata_json' => null,
                 'deleted_at' => null,
                 'created_at' => $created->format('Y-m-d\TH:i:s.uP'),
                 'updated_at' => $created->format('Y-m-d\TH:i:s.uP'),

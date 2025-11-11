@@ -1305,13 +1305,15 @@ async function queueSelectedKraska() {
 
 	try {
 		const queueMap = new Map();
-		const addQueueItem = (provider, externalId, title) => {
+		const baseTrail = buildKraskaNormalizedTrail();
+		const addQueueItem = (provider, externalId, title, metadata) => {
 			const key = `${provider}:${externalId}`;
 			if (!queueMap.has(key)) {
 				queueMap.set(key, {
 					provider,
 					external_id: externalId,
 					title: title && title.trim() !== '' ? title : `${provider.toUpperCase()} ${externalId}`,
+					...(metadata && Object.keys(metadata).length > 0 ? { metadata } : {}),
 				});
 			}
 		};
@@ -1319,16 +1321,26 @@ async function queueSelectedKraska() {
 		for (const item of directEntries) {
 			const provider = item.provider ?? 'kraska';
 			const title = item.label ?? item.summary ?? 'Untitled';
-			addQueueItem(provider, item.ident, title);
+			const metadata = buildKraskaMetadataForItem(item, { baseTrail });
+			addQueueItem(provider, item.ident, title, metadata);
 		}
 
 		for (const branch of branchEntries) {
 			const collected = await collectKraskaBranchItems(branch.path);
+			const branchTrail = appendKraskaTrail(baseTrail, {
+				label: typeof branch.label === 'string' ? branch.label : null,
+				path: typeof branch.path === 'string' ? branch.path : null,
+			});
 			for (const item of collected) {
 				if (!item.ident) continue;
 				const provider = item.provider ?? 'kraska';
 				const title = item.label ?? item.summary ?? branch.label ?? 'Untitled';
-				addQueueItem(provider, item.ident, title);
+				const metadata = buildKraskaMetadataForItem(item, {
+					baseTrail,
+					trailOverride: branchTrail,
+					branch,
+				});
+				addQueueItem(provider, item.ident, title, metadata);
 			}
 		}
 
@@ -1359,6 +1371,433 @@ async function queueSelectedKraska() {
 		}
 		updateKraskaQueueButton();
 	}
+}
+
+function buildKraskaMetadataForItem(item, options = {}) {
+	const baseTrail = Array.isArray(options.baseTrail) ? options.baseTrail : buildKraskaNormalizedTrail();
+	const effectiveTrail = Array.isArray(options.trailOverride) ? options.trailOverride : baseTrail;
+	const menuMetadata = {
+		current_path: typeof state.kraska.currentPath === 'string' ? state.kraska.currentPath : null,
+		title: typeof state.kraska.title === 'string' ? state.kraska.title : null,
+	};
+
+	if (Array.isArray(effectiveTrail) && effectiveTrail.length > 0) {
+		menuMetadata.trail = effectiveTrail;
+		menuMetadata.trail_labels = effectiveTrail
+			.map((crumb) => (typeof crumb.label === 'string' ? crumb.label : null))
+			.filter((label) => typeof label === 'string' && label.trim() !== '')
+			.map((label) => label.trim());
+	}
+
+	if (options.branch && typeof options.branch === 'object') {
+		const branchInfo = normalizeKraskaTrailSegment(options.branch);
+		if (branchInfo) {
+			menuMetadata.branch = branchInfo;
+		}
+	}
+
+	const itemMeta = collectKraskaItemMetaHints(item?.meta);
+	const itemMetadata = {
+		label: typeof item?.label === 'string' ? item.label : null,
+		summary: typeof item?.summary === 'string' ? item.summary : null,
+	};
+	if (itemMeta) {
+		itemMetadata.meta = itemMeta;
+	}
+
+	const metadata = {
+		source: 'kraska',
+		menu: menuMetadata,
+		item: itemMetadata,
+	};
+
+	const hints = deriveKraskaSeriesHints(menuMetadata, itemMetadata);
+	if (Object.keys(hints).length > 0) {
+		metadata.hints = hints;
+	}
+
+	const compacted = compactKraskaMetadata(metadata);
+	return isNonEmptyObject(compacted) ? compacted : null;
+}
+
+function collectKraskaItemMetaHints(meta) {
+	if (!meta || typeof meta !== 'object') {
+		return null;
+	}
+
+	const result = {};
+	const seasonValue = meta.season ?? meta.Season;
+		if (seasonValue !== undefined) {
+			const parsedSeason = Number.parseInt(seasonValue, 10);
+			if (Number.isFinite(parsedSeason)) {
+				result.season = parsedSeason;
+			} else if (typeof seasonValue === 'string' && seasonValue.trim() !== '') {
+				result.season_label = seasonValue.trim();
+			}
+	}
+
+	const episodeValue = meta.episode ?? meta.Episode;
+	if (episodeValue !== undefined) {
+		const parsedEpisode = Number.parseInt(episodeValue, 10);
+		if (Number.isFinite(parsedEpisode)) {
+			result.episode = parsedEpisode;
+			} else if (typeof episodeValue === 'string' && episodeValue.trim() !== '') {
+			result.episode_label = episodeValue.trim();
+		}
+	}
+
+	if (typeof meta.quality === 'string' && meta.quality.trim() !== '') {
+		result.quality = meta.quality.trim();
+	}
+
+	if (typeof meta.year === 'number' && Number.isFinite(meta.year)) {
+		result.year = meta.year;
+	}
+
+	const languages = Array.isArray(meta.languages) ? meta.languages : null;
+	if (languages) {
+		const normalizedLanguages = languages
+			.map((code) => (typeof code === 'string' ? code.trim() : ''))
+			.filter((code) => code !== '');
+		if (normalizedLanguages.length > 0) {
+			result.languages = normalizedLanguages;
+		}
+	}
+
+	return Object.keys(result).length > 0 ? result : null;
+}
+
+function deriveKraskaSeriesHints(menuMetadata, itemMetadata) {
+	const hints = {};
+	const trailLabels = Array.isArray(menuMetadata?.trail_labels)
+		? menuMetadata.trail_labels.filter((label) => typeof label === 'string' && label.trim() !== '').map((label) => label.trim())
+		: [];
+
+	let lastMeaningful = null;
+
+	for (const label of trailLabels) {
+		if (labelLooksLikeKraskaSeason(label)) {
+			if (hints.season_label === undefined) {
+				hints.season_label = label;
+			}
+			if (hints.season === undefined) {
+				const seasonNumber = extractSeasonNumberFromLabel(label);
+				if (seasonNumber !== null) {
+					hints.season = seasonNumber;
+				}
+			}
+			if (lastMeaningful) {
+				hints.series_title = lastMeaningful;
+			}
+		} else if (!labelLooksGenericKraska(label)) {
+			lastMeaningful = label;
+		}
+	}
+
+	if (!hints.series_title && lastMeaningful) {
+		hints.series_title = lastMeaningful;
+	}
+
+	const branchLabel = menuMetadata?.branch?.label;
+	if (!hints.series_title && typeof branchLabel === 'string' && branchLabel.trim() !== '' && !labelLooksGenericKraska(branchLabel) && !labelLooksLikeKraskaSeason(branchLabel)) {
+		hints.series_title = branchLabel.trim();
+	}
+
+	const menuTitle = menuMetadata?.title;
+	if (!hints.series_title && typeof menuTitle === 'string' && menuTitle.trim() !== '' && !labelLooksGenericKraska(menuTitle) && !labelLooksLikeKraskaSeason(menuTitle)) {
+		hints.series_title = menuTitle.trim();
+	}
+
+	const itemMeta = itemMetadata?.meta ?? {};
+	if (itemMeta && typeof itemMeta === 'object') {
+		if (itemMeta.season !== undefined && hints.season === undefined) {
+			const metaSeason = Number.parseInt(itemMeta.season, 10);
+			if (Number.isFinite(metaSeason)) {
+				hints.season = metaSeason;
+			}
+		}
+
+		if (itemMeta.episode !== undefined) {
+			const metaEpisode = Number.parseInt(itemMeta.episode, 10);
+			if (Number.isFinite(metaEpisode)) {
+				hints.episode = metaEpisode;
+			}
+		}
+
+		if (Array.isArray(itemMeta.languages)) {
+			const normalizedLangs = normalizeLanguageTokenList(itemMeta.languages, 2);
+			const suffix = normalizedLangs.length > 0 ? normalizedLangs.join(', ') : null;
+			if (suffix) {
+				hints.language_suffix = suffix;
+			}
+			if (normalizedLangs.length > 0) {
+				hints.languages = normalizedLangs;
+			}
+		}
+	}
+
+	const itemLabel = typeof itemMetadata?.label === 'string' ? itemMetadata.label : null;
+	if (itemLabel && itemLabel.trim() !== '') {
+		const parsedLabel = parseKraskaEpisodeLabel(itemLabel);
+		if (parsedLabel) {
+			if (hints.season === undefined && Number.isFinite(parsedLabel.season)) {
+				hints.season = parsedLabel.season;
+			}
+			if (hints.episode === undefined && Number.isFinite(parsedLabel.episode)) {
+				hints.episode = parsedLabel.episode;
+			}
+			if (!hints.episode_title && parsedLabel.episodeTitle) {
+				hints.episode_title = parsedLabel.episodeTitle;
+			}
+			if ((!hints.language_suffix || hints.language_suffix === '') && parsedLabel.languages.length > 0) {
+				hints.language_suffix = parsedLabel.languages.join(', ');
+			}
+			if (!Array.isArray(hints.languages) || hints.languages.length === 0) {
+				hints.languages = parsedLabel.languages;
+			}
+		}
+	}
+
+	Object.keys(hints).forEach((key) => {
+		const value = hints[key];
+		if (value === undefined || value === null || (typeof value === 'string' && value.trim() === '')) {
+			delete hints[key];
+		}
+	});
+
+	return hints;
+}
+
+function labelLooksLikeKraskaSeason(label) {
+	if (typeof label !== 'string' || label.trim() === '') {
+		return false;
+	}
+	const normalized = normalizeLabelForComparison(label);
+	if (normalized === '') {
+		return false;
+	}
+	if (/\bseason\b/.test(normalized) || /\bserie\b/.test(normalized) || /\bseria\b/.test(normalized) || /\bsezona\b/.test(normalized) || /\brada\b/.test(normalized)) {
+		return true;
+	}
+	return /S\d{1,2}/i.test(label) || /\b\d{1,2}\.\s*serie\b/i.test(label);
+}
+
+function extractSeasonNumberFromLabel(label) {
+	const match = typeof label === 'string' ? label.match(/(\d{1,2})/) : null;
+	return match ? Number.parseInt(match[1], 10) : null;
+}
+
+function labelLooksGenericKraska(label) {
+	const normalized = normalizeLabelForComparison(label);
+	if (normalized === '') {
+		return true;
+	}
+	const GENERIC = new Set([
+		'browse',
+		'home',
+		'katalog',
+		'kategorie',
+		'categories',
+		'filmy',
+		'movies',
+		'film',
+		'documentaries',
+		'dokumenty',
+		'serialy',
+		'serial',
+		'seriale',
+		'serials',
+		'serialy cz',
+		'serialy sk',
+		'serialy en',
+		'seriaty',
+		'seriay',
+		'seriay cz',
+		'series',
+		'stream cinema',
+		'stream cinema online',
+		'stream cinema cz',
+		'stream cinema sk',
+		'krask',
+		'kra sk',
+		'krask menu',
+		'search',
+		'vyhledavani',
+		'vyhladavanie',
+		'vyhledavanie',
+		'vyhledat',
+		'vyhledavac',
+		'popular',
+		'popularne',
+		'popularni',
+		'populární',
+		'oblíbené',
+		'oblibene',
+		'favourites',
+		'favorites',
+	]);
+
+	if (GENERIC.has(normalized)) {
+		return true;
+	}
+
+	if (normalized.startsWith('category ') || normalized.startsWith('kategorie ')) {
+		return true;
+	}
+
+	return false;
+}
+
+function normalizeLabelForComparison(label) {
+	if (typeof label !== 'string') {
+		return '';
+	}
+	let value = label.toLowerCase();
+	if (typeof value.normalize === 'function') {
+		value = value.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+	}
+	value = value.replace(/[^a-z0-9]+/g, ' ').trim();
+	return value;
+}
+
+function buildLanguageSuffixFromList(languages) {
+	const normalized = normalizeLanguageTokenList(languages, 2);
+	return normalized.length > 0 ? normalized.join(', ') : null;
+}
+
+function normalizeLanguageTokenList(tokens, limit = 2) {
+	if (!Array.isArray(tokens)) {
+		return [];
+	}
+	const seen = new Set();
+	const result = [];
+	for (const raw of tokens) {
+		if (result.length >= limit) break;
+		if (typeof raw !== 'string') continue;
+		let value = raw.trim();
+		if (value === '') continue;
+		value = value.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+		value = value.replace(/[^A-Za-z0-9+ ]/g, ' ');
+		value = value.replace(/\s+/g, ' ').trim();
+		if (value === '') continue;
+		const base = value.includes('+') ? value.split('+')[0] : value;
+		const upper = base.trim().toUpperCase();
+		if (upper === '' || seen.has(upper)) continue;
+		seen.add(upper);
+		result.push(upper);
+	}
+	return result;
+}
+
+function normalizeLanguageTokensFromString(value, limit = 2) {
+	if (typeof value !== 'string') {
+		return [];
+	}
+	const tokens = value.split(/[,|]/).map((token) => token.trim()).filter((token) => token !== '');
+	return normalizeLanguageTokenList(tokens, limit);
+}
+
+function parseKraskaEpisodeLabel(label) {
+	const match = label.match(/^(?<season>\d{1,2})x(?<episode>\d{1,2})\s*-\s*(?<title>[^-]+?)(?:\s*-\s*(?<suffix>.+))?$/iu);
+	if (!match || !match.groups) {
+		return null;
+	}
+	const season = Number.parseInt(match.groups.season, 10);
+	const episode = Number.parseInt(match.groups.episode, 10);
+	const title = match.groups.title ? match.groups.title.trim() : '';
+	const suffix = match.groups.suffix ? match.groups.suffix.trim() : '';
+	const languages = suffix !== '' ? normalizeLanguageTokensFromString(suffix, 2) : [];
+	return {
+		season: Number.isFinite(season) ? season : undefined,
+		episode: Number.isFinite(episode) ? episode : undefined,
+		episodeTitle: title,
+		languages,
+	};
+}
+
+function buildKraskaNormalizedTrail(extraSegments = []) {
+	const sourceTrail = Array.isArray(state.kraska.trail) ? state.kraska.trail : [];
+	const normalized = [];
+	for (const crumb of sourceTrail) {
+		const normal = normalizeKraskaTrailSegment(crumb);
+		if (normal) {
+			normalized.push(normal);
+		}
+	}
+	if (Array.isArray(extraSegments)) {
+		for (const segment of extraSegments) {
+			const normal = normalizeKraskaTrailSegment(segment);
+			if (normal) {
+				normalized.push(normal);
+			}
+		}
+	}
+	return normalized;
+}
+
+function appendKraskaTrail(trail, segment) {
+	const base = Array.isArray(trail) ? trail.slice() : [];
+	const normal = normalizeKraskaTrailSegment(segment);
+	if (normal) {
+		base.push(normal);
+	}
+	return base;
+}
+
+function normalizeKraskaTrailSegment(segment) {
+	if (!segment || typeof segment !== 'object') {
+		return null;
+	}
+	const label = typeof segment.label === 'string' ? segment.label.trim() : '';
+	const path = typeof segment.path === 'string' ? segment.path.trim() : '';
+	const payload = {};
+	if (label !== '') {
+		payload.label = label;
+	}
+	if (path !== '') {
+		payload.path = path;
+	}
+	return Object.keys(payload).length > 0 ? payload : null;
+}
+
+function compactKraskaMetadata(value) {
+	if (Array.isArray(value)) {
+		const cleaned = value
+			.map((entry) => compactKraskaMetadata(entry))
+			.filter((entry) => entry !== null && entry !== undefined && !isPlainEmptyObject(entry));
+		return cleaned;
+	}
+
+	if (value && typeof value === 'object') {
+		const result = {};
+		for (const [key, entry] of Object.entries(value)) {
+			const cleaned = compactKraskaMetadata(entry);
+			if (cleaned === null || cleaned === undefined) {
+				continue;
+			}
+			if (isPlainEmptyObject(cleaned)) {
+				continue;
+			}
+			result[key] = cleaned;
+		}
+		return result;
+	}
+
+	return value === undefined ? null : value;
+}
+
+function isPlainEmptyObject(value) {
+	return typeof value === 'object' && value !== null && !Array.isArray(value) && Object.keys(value).length === 0;
+}
+
+function isNonEmptyObject(value) {
+	if (typeof value !== 'object' || value === null) {
+		return false;
+	}
+	if (Array.isArray(value)) {
+		return value.length > 0;
+	}
+	return Object.keys(value).length > 0;
 }
 
 function normalizeKraskaItems(items) {

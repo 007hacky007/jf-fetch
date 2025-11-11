@@ -50,7 +50,7 @@ final class JobsStatsEndpointTest extends TestCase
 
         foreach ($jobs as $job) {
             Db::run(
-                'INSERT INTO jobs (id,user_id,provider_id,external_id,title,source_url,status,progress,priority,position,created_at,updated_at) VALUES (:id,1,1,:ext,:title,:src,:status,0,0,:pos,:now,:now)',
+                'INSERT INTO jobs (id,user_id,provider_id,external_id,title,source_url,status,progress,priority,position,metadata_json,created_at,updated_at) VALUES (:id,1,1,:ext,:title,:src,:status,0,0,:pos,:metadata,:now,:now)',
                 [
                     'id' => $job['id'],
                     'title' => 'Job ' . $job['id'],
@@ -58,6 +58,7 @@ final class JobsStatsEndpointTest extends TestCase
                     'pos' => $job['id'],
                     'ext' => 'ext-' . $job['id'],
                     'src' => 'http://example.com/video-' . $job['id'],
+                    'metadata' => null,
                     'now' => $now,
                 ]
             );
@@ -69,7 +70,7 @@ final class JobsStatsEndpointTest extends TestCase
             $filePath = $this->configDir . '/file_' . $cid . '.bin';
             file_put_contents($filePath, str_repeat('A', $cid === 20 ? 1500 : 4096)); // 1500 + 4096 bytes
             Db::run(
-                'INSERT INTO jobs (id,user_id,provider_id,external_id,title,source_url,status,progress,priority,position,final_path,created_at,updated_at) VALUES (:id,1,1,:ext,:title,:src,\'completed\',100,0,:pos,:path,:created,:updated)',
+                'INSERT INTO jobs (id,user_id,provider_id,external_id,title,source_url,status,progress,priority,position,final_path,metadata_json,created_at,updated_at) VALUES (:id,1,1,:ext,:title,:src,\'completed\',100,0,:pos,:path,:metadata,:created,:updated)',
                 [
                     'id' => $cid,
                     'title' => 'Completed ' . $cid,
@@ -77,6 +78,7 @@ final class JobsStatsEndpointTest extends TestCase
                     'ext' => 'ext-' . $cid,
                     'src' => 'http://example.com/video-' . $cid,
                     'path' => $filePath,
+                    'metadata' => null,
                     'created' => $now,
                     'updated' => $now,
                 ]
@@ -112,11 +114,19 @@ final class JobsStatsEndpointTest extends TestCase
 
     private function migrate(PDO $pdo): void
     {
-        $sql = file_get_contents(__DIR__ . '/../../database/migrations/0001_initial_schema.sql');
-        if (!is_string($sql)) {
-            $this->fail('Failed to read migration SQL');
+        $migrations = [
+            '/../../database/migrations/0001_initial_schema.sql',
+            '/../../database/migrations/0004_add_deleted_status_to_jobs.sql',
+            '/../../database/migrations/0005_add_metadata_json_to_jobs.sql',
+        ];
+
+        foreach ($migrations as $relativePath) {
+            $sql = file_get_contents(__DIR__ . $relativePath);
+            if (!is_string($sql)) {
+                $this->fail(sprintf('Failed to read migration SQL from %s', $relativePath));
+            }
+            $pdo->exec($sql);
         }
-        $pdo->exec($sql);
     }
 
     private function seedUsers(PDO $pdo): void

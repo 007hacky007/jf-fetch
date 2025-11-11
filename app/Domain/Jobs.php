@@ -8,6 +8,7 @@ use App\Infra\Db;
 use App\Support\Clock;
 use PDO;
 use RuntimeException;
+use Throwable;
 
 /**
  * Domain helpers for interacting with queued download jobs.
@@ -171,6 +172,11 @@ final class Jobs
 
         if ($row['deleted_at'] !== null) {
             $payload['deleted_at'] = (string) $row['deleted_at'];
+        }
+
+        $metadata = self::decodeMetadata($row['metadata_json'] ?? null);
+        if ($metadata !== null) {
+            $payload['metadata'] = $metadata;
         }
 
         return $payload;
@@ -349,6 +355,29 @@ final class Jobs
         $normalized = strtolower($value);
         $normalized = preg_replace('/[^a-z0-9]+/', '', $normalized ?? '') ?? '';
         return $normalized;
+    }
+
+    private static function decodeMetadata(mixed $value): ?array
+    {
+        if ($value === null) {
+            return null;
+        }
+
+        if (is_array($value)) {
+            return $value;
+        }
+
+        if (!is_string($value) || $value === '') {
+            return null;
+        }
+
+        try {
+            $decoded = json_decode($value, true, 512, JSON_THROW_ON_ERROR);
+        } catch (Throwable) {
+            return null;
+        }
+
+        return is_array($decoded) ? $decoded : null;
     }
 
     /**

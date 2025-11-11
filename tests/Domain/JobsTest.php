@@ -7,7 +7,6 @@ namespace App\Tests\Domain;
 use App\Domain\Jobs;
 use App\Tests\TestCase;
 use DateTimeImmutable;
-use PDO;
 
 final class JobsTest extends TestCase
 {
@@ -32,9 +31,9 @@ final class JobsTest extends TestCase
         $this->assertArrayHasKey('user', $formatted);
         $this->assertSame('Alice Admin', $formatted['user']['name']);
         $this->assertSame('alice@example.test', $formatted['user']['email']);
-    $this->assertSame('deleted', $formatted['status']);
-    $this->assertArrayHasKey('deleted_at', $formatted);
-    $this->assertSame('2024-01-02T12:00:00.000000+00:00', $formatted['deleted_at']);
+        $this->assertSame('deleted', $formatted['status']);
+        $this->assertArrayHasKey('deleted_at', $formatted);
+        $this->assertSame('2024-01-02T12:00:00.000000+00:00', $formatted['deleted_at']);
     }
 
     public function testFormatOmitsDeletedAtWhenNull(): void
@@ -71,12 +70,12 @@ final class JobsTest extends TestCase
 
         $statement = $pdo->prepare('INSERT INTO jobs (
             id, user_id, provider_id, external_id, title, source_url, category, status, progress, speed_bps,
-            eta_seconds, priority, position, aria2_gid, tmp_path, final_path, error_text, deleted_at,
+            eta_seconds, priority, position, aria2_gid, tmp_path, final_path, error_text, metadata_json, deleted_at,
             created_at, updated_at
         ) VALUES (
             :id, :user_id, :provider_id, :external_id, :title, :source_url, :category, :status, :progress,
             :speed_bps, :eta_seconds, :priority, :position, :aria2_gid, :tmp_path, :final_path, :error_text,
-            :deleted_at, :created_at, :updated_at
+            :metadata_json, :deleted_at, :created_at, :updated_at
         )');
 
         $statement->execute([
@@ -95,8 +94,9 @@ final class JobsTest extends TestCase
             'position' => 3,
             'aria2_gid' => null,
             'tmp_path' => null,
-            'final_path' => '/library/Movie/T/The Matrix (1999).mkv',
+            'final_path' => '/library/Movies/The Matrix (1999)/The Matrix (1999).mkv',
             'error_text' => null,
+            'metadata_json' => null,
             'deleted_at' => null,
             'created_at' => $timestamp->format('Y-m-d\TH:i:s.uP'),
             'updated_at' => $timestamp->format('Y-m-d\TH:i:s.uP'),
@@ -118,8 +118,9 @@ final class JobsTest extends TestCase
             'position' => 4,
             'aria2_gid' => null,
             'tmp_path' => null,
-            'final_path' => '/library/Series/The Simpsons/Season 37/The.Simpsons.S37E05.1080p.HEVC.x265-MeGusta.mkv',
+            'final_path' => '/library/Shows/The Simpsons/Season 37/The.Simpsons.S37E05.1080p.HEVC.x265-MeGusta.mkv',
             'error_text' => null,
+            'metadata_json' => null,
             'deleted_at' => null,
             'created_at' => $timestamp->modify('+1 minute')->format('Y-m-d\TH:i:s.uP'),
             'updated_at' => $timestamp->modify('+1 minute')->format('Y-m-d\TH:i:s.uP'),
@@ -172,6 +173,7 @@ final class JobsTest extends TestCase
             tmp_path TEXT NULL,
             final_path TEXT NULL,
             error_text TEXT NULL,
+            metadata_json TEXT NULL,
             deleted_at TEXT NULL,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
@@ -194,12 +196,12 @@ final class JobsTest extends TestCase
 
         $statement = $pdo->prepare('INSERT INTO jobs (
             id, user_id, provider_id, external_id, title, source_url, category, status, progress, speed_bps,
-            eta_seconds, priority, position, aria2_gid, tmp_path, final_path, error_text, deleted_at,
+            eta_seconds, priority, position, aria2_gid, tmp_path, final_path, error_text, metadata_json, deleted_at,
             created_at, updated_at
         ) VALUES (
             :id, :user_id, :provider_id, :external_id, :title, :source_url, :category, :status, :progress,
             :speed_bps, :eta_seconds, :priority, :position, :aria2_gid, :tmp_path, :final_path, :error_text,
-            :deleted_at, :created_at, :updated_at
+            :metadata_json, :deleted_at, :created_at, :updated_at
         )');
 
         $statement->execute([
@@ -220,6 +222,7 @@ final class JobsTest extends TestCase
             'tmp_path' => null,
             'final_path' => null,
             'error_text' => 'File deletion requested by administrator.',
+            'metadata_json' => null,
             'deleted_at' => $deletedAt->format('Y-m-d\TH:i:s.uP'),
             'created_at' => $createdAt->format('Y-m-d\TH:i:s.uP'),
             'updated_at' => $deletedAt->format('Y-m-d\TH:i:s.uP'),
@@ -227,12 +230,12 @@ final class JobsTest extends TestCase
 
         $statement = $pdo->prepare('INSERT INTO jobs (
             id, user_id, provider_id, external_id, title, source_url, category, status, progress, speed_bps,
-            eta_seconds, priority, position, aria2_gid, tmp_path, final_path, error_text, deleted_at,
+            eta_seconds, priority, position, aria2_gid, tmp_path, final_path, error_text, metadata_json, deleted_at,
             created_at, updated_at
         ) VALUES (
             :id, :user_id, :provider_id, :external_id, :title, :source_url, :category, :status, :progress,
             :speed_bps, :eta_seconds, :priority, :position, :aria2_gid, :tmp_path, :final_path, :error_text,
-            :deleted_at, :created_at, :updated_at
+            :metadata_json, :deleted_at, :created_at, :updated_at
         )');
 
         $statement->execute([
@@ -253,6 +256,7 @@ final class JobsTest extends TestCase
             'tmp_path' => null,
             'final_path' => '/library/Second Download.mkv',
             'error_text' => null,
+            'metadata_json' => null,
             'deleted_at' => null,
             'created_at' => $createdAt->format('Y-m-d\TH:i:s.uP'),
             'updated_at' => $createdAt->format('Y-m-d\TH:i:s.uP'),
