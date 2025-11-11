@@ -173,6 +173,8 @@ export const API = {
 	jobDownload: '/api/jobs/download',
 	jobStream: '/api/jobs/stream',
 	jobsStats: '/api/jobs/stats',
+	aria2Health: '/api/system/health.php',
+	logs: '/api/system/logs.php',
 	systemStorage: '/api/system/storage',
 	systemHealth: '/api/system/health',
 	users: '/api/users',

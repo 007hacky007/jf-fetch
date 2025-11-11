@@ -101,6 +101,12 @@ function runSchedulerLoop(string $root): void
 		try {
 			Config::reloadOverrides();
 
+			// Requeue orphan 'starting' jobs that never obtained an aria2_gid (e.g. provider init exception earlier)
+			$requeued = cleanupOrphanStartingJobs();
+			if ($requeued > 0) {
+				logInfo(sprintf('Requeued %d orphan starting job(s) without aria2_gid.', $requeued));
+			}
+
 			// Periodically rotate logs during runtime
 			$now = time();
 			if (($now - $lastLogRotation) >= $logRotationIntervalSeconds) {
@@ -216,11 +222,11 @@ function claimNextJob(array $skipProviderIds = []): ?array
  * @param array<string, mixed> $job
  * @param array<string, mixed> $providerRow
  */
+
 function processJob(array $job, array $providerRow, Aria2Client $aria2): void
 {
-	$provider = buildProvider($providerRow);
-
 	try {
+		$provider = buildProvider($providerRow);
 		$resolved = $provider->resolveDownloadUrl((string) $job['external_id']);
 		$uris = is_array($resolved) ? array_values($resolved) : [(string) $resolved];
 		$uris = array_filter(array_map('trim', $uris));
@@ -519,6 +525,37 @@ function hasCapacity(): bool
 	$count = (int) $stmt->fetchColumn();
 
 	return $count < $limit;
+}
+
+/**
+ * Requeues jobs stuck in 'starting' without an aria2_gid after a grace period.
+ * This prevents phantom active slots when a provider initialization error occurred
+ * before we transitioned the job to 'downloading'.
+ */
+function cleanupOrphanStartingJobs(int $ageSeconds = 60): int
+{
+	$thresholdSql = "SELECT id FROM jobs WHERE status = 'starting' AND (aria2_gid IS NULL OR aria2_gid = '') AND updated_at < datetime('now', :offset)";
+	$offset = sprintf('-%d seconds', max(5, $ageSeconds));
+	$stmt = Db::run($thresholdSql, ['offset' => $offset]);
+	$ids = $stmt->fetchAll(PDO::FETCH_COLUMN);
+	if ($ids === false || $ids === []) {
+		return 0;
+	}
+
+	$now = Clock::nowString();
+	foreach ($ids as $id) {
+		Db::run(
+			"UPDATE jobs SET status='queued', updated_at=:updated_at, aria2_gid=NULL WHERE id = :id",
+			[
+				'updated_at' => $now,
+				'id' => (int) $id,
+			]
+		);
+		// Minimal audit trail (job might later fail again if provider is still misconfigured)
+		Audit::record(0, 'job.requeued.orphan', 'job', (int) $id, []);
+	}
+
+	return count($ids);
 }
 
 /**

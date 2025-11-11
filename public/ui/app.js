@@ -386,6 +386,26 @@ function wireAdmin() {
 	els.auditRefreshBtn?.addEventListener('click', () => loadAudit(true));
 	els.auditLoadMore?.addEventListener('click', () => loadAudit(false));
 
+	// Aria2 health check button
+	const aria2Btn = document.getElementById('aria2-health-btn');
+	aria2Btn?.addEventListener('click', () => runAria2HealthCheck());
+
+	// Logs refresh button
+	const logsRefreshBtn = document.getElementById('logs-refresh-btn');
+	logsRefreshBtn?.addEventListener('click', () => refreshLogs(true));
+
+	// Logs auto-refresh toggle
+	const logsAuto = document.getElementById('logs-auto-refresh');
+	logsAuto?.addEventListener('change', () => toggleLogsAutoRefresh());
+
+	// Logs select change
+	const logsSelect = document.getElementById('logs-select');
+	logsSelect?.addEventListener('change', () => refreshLogs(true));
+
+	// Lines change
+	const logsLines = document.getElementById('logs-lines');
+	logsLines?.addEventListener('change', () => refreshLogs(true));
+
 		els.userCreateBtn?.addEventListener('click', () => openUserModal());
 
 		els.usersTable?.addEventListener('click', (event) => {
@@ -930,6 +950,7 @@ function switchView(view) {
 
 	if (view === 'audit' && state.isAdmin && state.auditLogs.length === 0) {
 		loadAudit(true);
+		initLogsUI();
 	}
 
 	if (view === 'settings' && state.isAdmin) {
@@ -938,6 +959,118 @@ function switchView(view) {
 
 	if (view === 'kraska') {
 		ensureKraskaLoaded();
+	}
+}
+
+// --- Aria2 Health & Logs ---
+let logsAutoRefreshId = null;
+
+function runAria2HealthCheck() {
+	const container = document.getElementById('aria2-health');
+	if (!container) return;
+	container.classList.remove('hidden');
+	container.textContent = 'Checking aria2…';
+	fetchJson(API.aria2Health + '?t=' + Date.now(), { cache: 'no-store' })
+		.then((response) => {
+			const aria = response?.checks?.aria2 ?? {};
+			const db = response?.checks?.database ?? {};
+			const runtime = response?.checks?.runtime ?? {};
+			const status = response?.status ?? 'unknown';
+			container.innerHTML = renderHealthStatus({ status, aria, db, runtime, checked_at: response?.checked_at });
+		})
+		.catch((error) => {
+			container.innerHTML = `<div class="text-xs text-rose-300">${escapeHtml(messageFromError(error))}</div>`;
+		});
+}
+
+function renderHealthStatus(payload) {
+	const parts = [];
+	const label = (title, body, variant = 'ok') => `<div class="flex flex-col gap-1 rounded-lg border ${variant === 'ok' ? 'border-emerald-600/40 bg-emerald-500/5' : 'border-rose-600/40 bg-rose-500/5'} p-3"><div class="text-xs font-semibold uppercase tracking-wide text-slate-300">${escapeHtml(title)}</div>${body}</div>`;
+	const aria = payload.aria ?? {};
+	const ariaOk = aria.status === 'ok';
+	const ariaBody = ariaOk
+		? `<div class="text-xs text-slate-300">Version: <span class="font-mono">${escapeHtml(String(aria.version ?? 'n/a'))}</span><br/>Features: ${Array.isArray(aria.enabled_features) && aria.enabled_features.length > 0 ? escapeHtml(aria.enabled_features.join(', ')) : '—'}</div>`
+		: `<div class="text-xs text-rose-300">${escapeHtml(String(aria.message ?? 'Unavailable'))}</div>`;
+	parts.push(label('Aria2', ariaBody, ariaOk ? 'ok' : 'error'));
+	const db = payload.db ?? {};
+	const dbOk = db.status === 'ok';
+	const dbBody = dbOk
+		? `<div class="text-xs text-slate-300">Latency: ${escapeHtml(String(db.latency_ms ?? 'n/a'))} ms</div>`
+		: `<div class="text-xs text-rose-300">${escapeHtml(String(db.message ?? 'Error'))}</div>`;
+	parts.push(label('Database', dbBody, dbOk ? 'ok' : 'error'));
+	const runtime = payload.runtime ?? {};
+	parts.push(label('Runtime', `<div class="text-xs text-slate-300">PHP ${escapeHtml(String(runtime.php_version ?? ''))}</div>`));
+	const checkedAt = payload.checked_at ? `<div class="text-[10px] text-slate-500">Checked ${escapeHtml(formatRelativeTime(payload.checked_at))}</div>` : '';
+	return `<div class="grid gap-2 sm:grid-cols-3">${parts.join('')}</div>${checkedAt}`;
+}
+
+function initLogsUI() {
+	const wrapper = document.getElementById('logs-wrapper');
+	if (!wrapper) return;
+	wrapper.classList.remove('hidden');
+	loadLogList();
+}
+
+async function loadLogList() {
+	const select = document.getElementById('logs-select');
+	if (!(select instanceof HTMLSelectElement)) return;
+	try {
+		const response = await fetchJson(API.logs);
+		const entries = Array.isArray(response?.data) ? response.data : [];
+		select.innerHTML = entries
+			.map((e) => `<option value="${escapeHtml(String(e.name))}">${escapeHtml(String(e.name))}${Number.isFinite(e.size_bytes) ? ` (${formatRelativeSize(e.size_bytes)})` : ''}</option>`)
+			.join('');
+		refreshLogs(true);
+	} catch (error) {
+		const errorEl = document.getElementById('logs-error');
+		if (errorEl) {
+			errorEl.textContent = messageFromError(error);
+			errorEl.classList.remove('hidden');
+		}
+	}
+}
+
+function refreshLogs(force = false) {
+	const select = document.getElementById('logs-select');
+	const linesInput = document.getElementById('logs-lines');
+	const content = document.getElementById('logs-content');
+	const errorEl = document.getElementById('logs-error');
+	if (!(select instanceof HTMLSelectElement) || !content) return;
+	const file = select.value;
+	const linesRaw = linesInput instanceof HTMLInputElement ? Number.parseInt(linesInput.value, 10) : 120;
+	const lines = Number.isFinite(linesRaw) ? Math.max(10, Math.min(linesRaw, 500)) : 120;
+	if (linesInput instanceof HTMLInputElement) {
+		linesInput.value = String(lines);
+	}
+	if (errorEl) {
+		errorEl.classList.add('hidden');
+		errorEl.textContent = '';
+	}
+	content.textContent = 'Loading…';
+	fetchJson(`${API.logs}?file=${encodeURIComponent(file)}&lines=${lines}&t=${Date.now()}`)
+		.then((response) => {
+			const linesArr = Array.isArray(response?.data) ? response.data : [];
+			content.textContent = linesArr.join('\n');
+		})
+		.catch((error) => {
+			content.textContent = '';
+			if (errorEl) {
+				errorEl.textContent = messageFromError(error);
+				errorEl.classList.remove('hidden');
+			}
+		});
+}
+
+function toggleLogsAutoRefresh() {
+	const auto = document.getElementById('logs-auto-refresh');
+	if (!(auto instanceof HTMLInputElement)) return;
+	if (logsAutoRefreshId !== null) {
+		window.clearInterval(logsAutoRefreshId);
+		logsAutoRefreshId = null;
+	}
+	if (auto.checked) {
+		logsAutoRefreshId = window.setInterval(() => refreshLogs(false), 10_000);
+		refreshLogs(false);
 	}
 }
 
@@ -2574,16 +2707,17 @@ function renderAuditRow(entry) {
 
 	return `
 		<tr class="divide-x divide-slate-800/70">
-			<td class="px-4 py-3 text-xs text-slate-300"><span title="${escapeHtml(absolute)}">${escapeHtml(relative)}</span></td>
-			<td class="px-4 py-3 text-sm text-slate-200">
+			<td class="px-3 py-2 text-[11px] text-slate-400"><span title="${escapeHtml(absolute)}">${escapeHtml(relative)}</span></td>
+			<td class="px-3 py-2 text-[11px] font-mono text-slate-300">${escapeHtml(createdAt)}</td>
+			<td class="px-3 py-2 text-xs text-slate-200">
 				<div class="flex flex-col">
 					<span class="font-medium">${escapeHtml(userName)}</span>
-					${user.email && user.email !== userName ? `<span class="text-xs text-slate-400">${escapeHtml(user.email)}</span>` : ''}
+					${user.email && user.email !== userName ? `<span class="text-[10px] text-slate-500">${escapeHtml(user.email)}</span>` : ''}
 				</div>
 			</td>
-			<td class="px-4 py-3 text-sm text-slate-100">${escapeHtml(entry.action ?? '')}</td>
-			<td class="px-4 py-3 text-sm text-slate-200">${escapeHtml(subjectLabel)}</td>
-			<td class="px-4 py-3">${payloadDisplay}</td>
+			<td class="px-3 py-2 text-xs text-slate-100">${escapeHtml(entry.action ?? '')}</td>
+			<td class="px-3 py-2 text-xs text-slate-300">${escapeHtml(subjectLabel)}</td>
+			<td class="px-3 py-2">${payloadDisplay}</td>
 		</tr>
 	`;
 }

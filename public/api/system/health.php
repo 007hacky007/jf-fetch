@@ -47,7 +47,7 @@ try {
     $overallStatus = 'error';
 }
 
-// aria2 RPC health check.
+// aria2 RPC health check (version + global stats if available)
 $aria2Result = checkAria2();
 $checks['aria2'] = $aria2Result;
 if ($aria2Result['status'] !== 'ok') {
