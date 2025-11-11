@@ -6,6 +6,15 @@ use App\Infra\Auth;
 use App\Infra\Config;
 use App\Infra\Db;
 use App\Infra\Http;
+use DateTimeImmutable;
+use JsonException;
+use RuntimeException;
+use Throwable;
+
+require_once dirname(__DIR__, 3) . '/vendor/autoload.php';
+
+Config::boot(dirname(__DIR__, 3) . '/config');
+Auth::boot();
 
 header('Content-Type: application/json');
 
@@ -15,7 +24,6 @@ if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
 }
 
 try {
-    Auth::boot();
     Auth::requireUser();
 } catch (RuntimeException $exception) {
     Http::error(401, $exception->getMessage());
