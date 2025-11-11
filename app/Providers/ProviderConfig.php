@@ -65,6 +65,41 @@ final class ProviderConfig
         $username = isset($config['username']) ? trim((string) $config['username']) : '';
         $password = isset($config['password']) ? (string) $config['password'] : '';
         $uuid = isset($config['uuid']) ? trim((string) $config['uuid']) : '';
+        // Allow global toggle via app.ini [providers] kraska_debug or env KRASKA_DEBUG=1
+        $globalDebug = false;
+        $iniDebug = \App\Infra\Config::has('providers.kraska_debug') ? \App\Infra\Config::get('providers.kraska_debug') : null;
+        if (is_string($iniDebug)) {
+            $iniDebug = trim($iniDebug);
+        }
+        if (is_bool($iniDebug)) {
+            $globalDebug = $iniDebug;
+        } elseif (is_string($iniDebug) && $iniDebug !== '') {
+            $lower = strtolower($iniDebug);
+            $globalDebug = in_array($lower, ['1','true','yes','on'], true);
+        }
+        $envDebug = getenv('KRASKA_DEBUG');
+        if (is_string($envDebug) && $envDebug !== '') {
+            $envLower = strtolower(trim($envDebug));
+            if (in_array($envLower, ['1','true','yes','on'], true)) {
+                $globalDebug = true;
+            } elseif (in_array($envLower, ['0','false','no','off'], true)) {
+                $globalDebug = false;
+            }
+        }
+        // Allow explicit per-provider override in passed $config['debug']
+        if (isset($config['debug'])) {
+            $passedDebug = $config['debug'];
+            if (is_bool($passedDebug)) {
+                $globalDebug = $passedDebug;
+            } elseif (is_string($passedDebug) && $passedDebug !== '') {
+                $pdLower = strtolower(trim($passedDebug));
+                if (in_array($pdLower, ['1','true','yes','on'], true)) {
+                    $globalDebug = true;
+                } elseif (in_array($pdLower, ['0','false','no','off'], true)) {
+                    $globalDebug = false;
+                }
+            }
+        }
 
         if ($username === '' || $password === '') {
             throw new RuntimeException('Kra.sk username and password are required.');
@@ -73,7 +108,7 @@ final class ProviderConfig
         // We can do a lightweight login attempt to validate credentials. Any failure throws.
         if (getenv('KRA_SKIP_VALIDATE') !== '1') {
             try {
-                $provider = new KraSkProvider(['username' => $username, 'password' => $password]);
+                $provider = new KraSkProvider(['username' => $username, 'password' => $password, 'debug' => $globalDebug]);
                 // Perform a login by requesting user info (forces login internally via protected API call)
                 $ref = new \ReflectionClass($provider);
                 if ($ref->hasMethod('search')) { /* no-op just for static analyzers */ }
@@ -93,6 +128,7 @@ final class ProviderConfig
 
         $config['username'] = $username;
         $config['password'] = $password;
+        $config['debug'] = $globalDebug;
         if ($uuid !== '') {
             // Accept a broader identifier: 5-50 chars, lowercase letters, digits, and dashes.
             // This accommodates non-hex characters seen in some existing client UUIDs.

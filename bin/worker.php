@@ -9,6 +9,7 @@ use App\Infra\Db;
 use App\Infra\Events;
 use App\Infra\Jellyfin;
 use App\Support\Clock;
+use App\Support\LogRotation;
 use RuntimeException;
 
 /**
@@ -81,14 +82,27 @@ function runWorkerLoop(string $root): void
 {
 	Config::boot($root . '/config');
 
+	// Rotate logs on startup
+	$logsDir = $root . '/storage/logs';
+	LogRotation::rotateAll($logsDir, 5, 10485760); // Keep 5 rotations, max 10MB per file
+
 	$aria2 = new Aria2Client();
 	$loopDelaySeconds = 3;
+	$logRotationIntervalSeconds = 300; // Check every 5 minutes
+	$lastLogRotation = time();
 
 	logInfo('Worker started.');
 
 	while (true) {
 		try {
 			Config::reloadOverrides();
+
+			// Periodically rotate logs during runtime
+			$now = time();
+			if (($now - $lastLogRotation) >= $logRotationIntervalSeconds) {
+				LogRotation::rotateAll($logsDir, 5, 10485760);
+				$lastLogRotation = $now;
+			}
 
 			$jobs = fetchActiveJobs();
 			if ($jobs === []) {

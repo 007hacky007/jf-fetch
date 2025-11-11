@@ -13,6 +13,7 @@ use App\Providers\RateLimitDeferredException;
 use App\Providers\KraSkApiException;
 use App\Providers\KraSkProvider;
 use App\Support\Clock;
+use App\Support\LogRotation;
 
 /**
  * Scheduler loop: selects queued jobs and enqueues them to aria2 while
@@ -84,15 +85,28 @@ function runSchedulerLoop(string $root): void
 {
 	Config::boot($root . '/config');
 
+	// Rotate logs on startup
+	$logsDir = $root . '/storage/logs';
+	LogRotation::rotateAll($logsDir, 5, 10485760); // Keep 5 rotations, max 10MB per file
+
 	$aria2 = new Aria2Client();
 	$loopDelaySeconds = 3;
 	$providerThrottleUntil = [];
+	$logRotationIntervalSeconds = 300; // Check every 5 minutes
+	$lastLogRotation = time();
 
 	logInfo('Scheduler started.');
 
 	while (true) {
 		try {
 			Config::reloadOverrides();
+
+			// Periodically rotate logs during runtime
+			$now = time();
+			if (($now - $lastLogRotation) >= $logRotationIntervalSeconds) {
+				LogRotation::rotateAll($logsDir, 5, 10485760);
+				$lastLogRotation = $now;
+			}
 
 			if (!hasFreeSpace()) {
 				sleepWithLog($loopDelaySeconds, 'Awaiting free disk space.');
@@ -104,7 +118,6 @@ function runSchedulerLoop(string $root): void
 				continue;
 			}
 
-			$now = time();
 			$skipProviderIds = [];
 			foreach ($providerThrottleUntil as $providerId => $until) {
 				if ($until > $now) {
@@ -394,6 +407,11 @@ function buildProvider(array $providerRow): VideoProvider
 	}
 
 	$config = ProviderSecrets::decrypt($providerRow);
+
+	// Inject debug setting from application config for kraska provider
+	if ($key === 'kraska') {
+		$config['debug'] = Config::get('providers.kraska_debug_enabled');
+	}
 
 	$provider = match ($key) {
 		'webshare' => new WebshareProvider($config),

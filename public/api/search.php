@@ -91,8 +91,14 @@ Http::json(200, [
 function buildProvider(array $row): VideoProvider
 {
     $config = ProviderSecrets::decrypt($row);
+    
+    // Inject debug setting from application config for kraska provider
+    $key = (string) $row['key'];
+    if ($key === 'kraska') {
+        $config['debug'] = Config::get('providers.kraska_debug_enabled');
+    }
 
-    return match ((string) $row['key']) {
+    return match ($key) {
         'webshare' => new WebshareProvider($config),
         'kraska' => new KraSkProvider($config),
         default => throw new RuntimeException('Unsupported provider: ' . $row['key']),

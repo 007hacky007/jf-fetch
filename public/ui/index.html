@@ -220,6 +220,13 @@
                       <input id="settings-kraska-menu-cache-ttl" type="number" min="0" step="0.1" class="rounded-lg border border-slate-800 bg-slate-950/70 px-3 py-2 text-base text-slate-100 focus:border-brand-400 focus:outline-none focus:ring focus:ring-brand-500/40" placeholder="7" />
                       <span class="text-[11px] text-slate-500">Set to 0 to disable caching for the Kra.sk menu.</span>
                     </label>
+                    <label class="flex items-center gap-3 text-sm">
+                      <input id="settings-kraska-debug-enabled" type="checkbox" class="rounded border-slate-600 bg-slate-800 text-brand-500 focus:ring-brand-500/60" />
+                      <div class="flex flex-col gap-1">
+                        <span class="font-medium text-slate-200">Enable Kra.sk debug logging</span>
+                        <span class="text-[11px] text-slate-500">Logs detailed provider activity to kraska_debug.log. Credentials are automatically censored.</span>
+                      </div>
+                    </label>
                   </fieldset>
 
                   <fieldset class="grid gap-4 rounded-2xl border border-slate-800/60 bg-slate-900/50 p-5">

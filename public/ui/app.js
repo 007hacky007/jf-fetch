@@ -514,6 +514,8 @@ async function saveSettings() {
 	const kraskaTtlDays = Number.isNaN(parsedKraskaTtl) ? null : Math.max(parsedKraskaTtl, 0);
 	const kraskaTtlSeconds = kraskaTtlDays === null ? null : Math.round(kraskaTtlDays * 86400);
 
+	const kraskaDebugEnabled = els.settingsKraskaDebugEnabled?.checked ?? false;
+
 	const payload = {
 		app: {
 			base_url: (els.settingsBaseUrl?.value ?? '').trim(),
@@ -532,6 +534,7 @@ async function saveSettings() {
 		},
 		providers: {
 			kraska_menu_cache_ttl_seconds: kraskaTtlSeconds,
+			kraska_debug_enabled: kraskaDebugEnabled,
 		},
 	};
 
@@ -589,6 +592,7 @@ function renderSettings() {
 		els.settingsMinFreeSpace,
 		els.settingsDefaultSearchLimit,
 		els.settingsKraskaMenuCacheTtl,
+		els.settingsKraskaDebugEnabled,
 		els.settingsDownloadsPath,
 		els.settingsLibraryPath,
 		els.settingsJellyfinUrl,
@@ -631,6 +635,9 @@ function renderSettings() {
 				const rounded = Math.round(ttlDays * 10) / 10;
 				els.settingsKraskaMenuCacheTtl.value = Number.isFinite(rounded) ? String(rounded) : '';
 			}
+		}
+		if (els.settingsKraskaDebugEnabled) {
+			els.settingsKraskaDebugEnabled.checked = settings?.providers?.kraska_debug_enabled === true;
 		}
 		if (els.settingsDownloadsPath) {
 			els.settingsDownloadsPath.value = settings?.paths?.downloads ?? '';

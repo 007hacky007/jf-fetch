@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use App\Infra\Auth;
+use App\Infra\Config;
 use App\Infra\Db;
 use App\Infra\Http;
 use App\Infra\ProviderSecrets;
@@ -43,6 +44,8 @@ try {
     }
 
     $config = ProviderSecrets::decrypt($providerRow);
+    // Inject debug setting from application config
+    $config['debug'] = Config::get('providers.kraska_debug_enabled');
     $provider = new KraSkProvider($config);
     $options = $provider->listDownloadOptions($externalId);
 

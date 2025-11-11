@@ -92,6 +92,7 @@ function buildSettingsResponse(): array
 		],
 		'providers' => [
 			'kraska_menu_cache_ttl_seconds' => (int) Config::get('providers.kraska_menu_cache_ttl_seconds'),
+			'kraska_debug_enabled' => (bool) Config::get('providers.kraska_debug_enabled'),
 		],
 	];
 }
@@ -109,6 +110,7 @@ function validateSettingsPayload(array $payload): array
 		'app.min_free_space_gb' => ['section' => 'app', 'field' => 'min_free_space_gb', 'type' => 'float', 'min' => 0],
 		'app.default_search_limit' => ['section' => 'app', 'field' => 'default_search_limit', 'type' => 'int', 'min' => 1, 'max' => 100],
 		'providers.kraska_menu_cache_ttl_seconds' => ['section' => 'providers', 'field' => 'kraska_menu_cache_ttl_seconds', 'type' => 'int', 'min' => 0, 'max' => 31536000],
+		'providers.kraska_debug_enabled' => ['section' => 'providers', 'field' => 'kraska_debug_enabled', 'type' => 'bool', 'required' => false],
 		'paths.downloads' => ['section' => 'paths', 'field' => 'downloads', 'type' => 'string', 'required' => true],
 		'paths.library' => ['section' => 'paths', 'field' => 'library', 'type' => 'string', 'required' => true],
 		'jellyfin.url' => ['section' => 'jellyfin', 'field' => 'url', 'type' => 'string', 'required' => false],
@@ -220,6 +222,15 @@ function validateSettingsPayload(array $payload): array
 			case 'jellyfin.library_id':
 				$value = trim((string) $rawValue);
 				$normalized[$key] = $value;
+				break;
+
+			case 'providers.kraska_debug_enabled':
+				$value = filter_var($rawValue, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
+				if ($value === null) {
+					$errors[$key] = 'Kra.sk debug must be a boolean value.';
+					break;
+				}
+				$normalized[$key] = (bool) $value;
 				break;
 		}
 	}

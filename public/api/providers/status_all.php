@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use App\Infra\Auth;
+use App\Infra\Config;
 use App\Infra\Db;
 use App\Infra\Http;
 use App\Infra\ProviderSecrets;
@@ -111,6 +112,11 @@ function buildProvider(array $providerRow): VideoProvider
 {
     $config = ProviderSecrets::decrypt($providerRow);
     $key = (string) $providerRow['key'];
+    
+    // Inject debug setting from application config for kraska provider
+    if ($key === 'kraska') {
+        $config['debug'] = Config::get('providers.kraska_debug_enabled');
+    }
 
     return match ($key) {
         'webshare' => new WebshareProvider($config),

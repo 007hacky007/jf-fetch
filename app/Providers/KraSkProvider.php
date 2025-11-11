@@ -2102,11 +2102,94 @@ class KraSkProvider implements VideoProvider, StatusCapableProvider
 
     private function debugLog(string $line): void
     {
+        // Check if debug logging is enabled (configurable via settings or config)
+        if (($this->config['debug'] ?? false) !== true) {
+            return;
+        }
+
         // app/Providers -> app -> project root (2 levels up)
         $root = dirname(__DIR__, 2);
         $file = $root . '/storage/logs/kraska_debug.log';
+        
+        // Censor sensitive data before logging
+        $sanitized = $this->censorSensitiveData($line);
+        
         $ts = date('c');
-        @file_put_contents($file, '[' . $ts . '] ' . $line . "\n", FILE_APPEND);
+        
+        // Rotate log if it gets too large (before appending)
+        if (file_exists($file)) {
+            clearstatcache(true, $file);
+            $size = @filesize($file);
+            if ($size !== false && $size > 10485760) { // 10MB
+                // Simple rotation: keep up to 5 rotations
+                $this->rotateDebugLog($file);
+            }
+        }
+        
+        @file_put_contents($file, '[' . $ts . '] ' . $sanitized . "\n", FILE_APPEND);
+    }
+
+    /**
+     * Censors sensitive data from log messages.
+     */
+    private function censorSensitiveData(string $message): string
+    {
+        // Censor JSON payloads containing credentials
+        $censored = preg_replace_callback(
+            '/"(password|session_id|api_key|token|secret|auth)"\s*:\s*"([^"]+)"/i',
+            function ($matches) {
+                $key = $matches[1];
+                $value = $matches[2];
+                $masked = strlen($value) > 4 
+                    ? substr($value, 0, 2) . str_repeat('*', min(8, strlen($value) - 4)) . substr($value, -2)
+                    : str_repeat('*', strlen($value));
+                return '"' . $key . '":"' . $masked . '"';
+            },
+            $message
+        );
+        
+        // Censor query parameters in URLs
+        $censored = preg_replace_callback(
+            '/([?&])(password|token|api_key|secret|auth|session_id)=([^&\s]+)/i',
+            function ($matches) {
+                $separator = $matches[1];
+                $key = $matches[2];
+                $value = $matches[3];
+                $masked = strlen($value) > 4
+                    ? substr($value, 0, 2) . str_repeat('*', min(8, strlen($value) - 4)) . substr($value, -2)
+                    : str_repeat('*', strlen($value));
+                return $separator . $key . '=' . $masked;
+            },
+            $censored
+        );
+        
+        return $censored;
+    }
+
+    /**
+     * Rotates the debug log file, keeping only 5 rotations.
+     */
+    private function rotateDebugLog(string $logPath): void
+    {
+        $maxRotations = 5;
+        
+        // Remove the oldest rotation
+        $oldestRotation = $logPath . '.' . $maxRotations;
+        if (file_exists($oldestRotation)) {
+            @unlink($oldestRotation);
+        }
+        
+        // Shift existing rotations
+        for ($i = $maxRotations - 1; $i >= 1; $i--) {
+            $oldFile = $logPath . '.' . $i;
+            $newFile = $logPath . '.' . ($i + 1);
+            if (file_exists($oldFile)) {
+                @rename($oldFile, $newFile);
+            }
+        }
+        
+        // Rotate the current log file
+        @rename($logPath, $logPath . '.1');
     }
 
     /**

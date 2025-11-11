@@ -73,6 +73,8 @@ try {
 
     if ($result === null) {
         $config = ProviderSecrets::decrypt($providerRow);
+        // Inject debug setting from application config
+        $config['debug'] = Config::get('providers.kraska_debug_enabled');
         $provider = new KraSkProvider($config);
         $result = filterMenuPayload($provider->browseMenu($path));
 
