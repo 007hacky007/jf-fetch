@@ -30,8 +30,10 @@ final class Jobs
             $params['user_id'] = $userId;
         }
 
+        $statusOrder = "CASE jobs.status\n                WHEN 'downloading' THEN 0\n                WHEN 'starting' THEN 1\n                WHEN 'paused' THEN 2\n                WHEN 'queued' THEN 3\n                WHEN 'completed' THEN 4\n                WHEN 'failed' THEN 5\n                WHEN 'canceled' THEN 6\n                WHEN 'deleted' THEN 7\n                ELSE 8\n            END";
+
         $statement = Db::run(
-            "SELECT jobs.*,\n                    providers.key AS provider_key,\n                    providers.name AS provider_name,\n                    users.name AS user_name,\n                    users.email AS user_email\n             FROM jobs\n             INNER JOIN providers ON providers.id = jobs.provider_id\n             INNER JOIN users ON users.id = jobs.user_id\n             $where\n             ORDER BY jobs.priority ASC, jobs.position ASC, jobs.created_at ASC",
+                "SELECT jobs.*,\n                    providers.key AS provider_key,\n                    providers.name AS provider_name,\n                    users.name AS user_name,\n                    users.email AS user_email\n             FROM jobs\n             INNER JOIN providers ON providers.id = jobs.provider_id\n             INNER JOIN users ON users.id = jobs.user_id\n             $where\n             ORDER BY $statusOrder ASC, jobs.priority ASC, jobs.position ASC, jobs.created_at ASC, jobs.id ASC",
             $params
         );
 
@@ -41,7 +43,7 @@ final class Jobs
     }
 
     /**
-     * Paged listing variant matching UI ordering (newest first by created_at).
+     * Paged listing variant matching UI ordering (status weight, then priority/position/created_at).
      * Returns associative array with 'rows' and 'total'.
      *
      * @return array{rows: array<int, array<string, mixed>>, total: int}
@@ -65,8 +67,10 @@ final class Jobs
         $countRow = $countStmt->fetch(PDO::FETCH_ASSOC);
         $total = $countRow !== false ? (int) ($countRow['cnt'] ?? 0) : 0;
 
-        // UI expects newest first (created_at DESC) then priority/position for consistent queue ordering
-        $sql = "SELECT jobs.*,\n                    providers.key AS provider_key,\n                    providers.name AS provider_name,\n                    users.name AS user_name,\n                    users.email AS user_email\n             FROM jobs\n             INNER JOIN providers ON providers.id = jobs.provider_id\n             INNER JOIN users ON users.id = jobs.user_id\n             $where\n             ORDER BY jobs.created_at DESC, jobs.priority ASC, jobs.position ASC, jobs.id DESC\n             LIMIT :limit OFFSET :offset";
+        // Match UI ordering: active downloads first, then priority/position/created_at/id for stability.
+        $statusOrder = "CASE jobs.status\n                WHEN 'downloading' THEN 0\n                WHEN 'starting' THEN 1\n                WHEN 'paused' THEN 2\n                WHEN 'queued' THEN 3\n                WHEN 'completed' THEN 4\n                WHEN 'failed' THEN 5\n                WHEN 'canceled' THEN 6\n                WHEN 'deleted' THEN 7\n                ELSE 8\n            END";
+
+    $sql = "SELECT jobs.*,\n                    providers.key AS provider_key,\n                    providers.name AS provider_name,\n                    users.name AS user_name,\n                    users.email AS user_email\n             FROM jobs\n             INNER JOIN providers ON providers.id = jobs.provider_id\n             INNER JOIN users ON users.id = jobs.user_id\n             $where\n             ORDER BY $statusOrder ASC, jobs.priority ASC, jobs.position ASC, jobs.created_at ASC, jobs.id ASC\n             LIMIT :limit OFFSET :offset";
 
         // Use explicit binding for limit/offset (PDO prepared statement requires int cast)
         $params['limit'] = $limit;
@@ -89,7 +93,7 @@ final class Jobs
     public static function fetchById(int $jobId): ?array
     {
         $statement = Db::run(
-            "SELECT jobs.*,\n                    providers.key AS provider_key,\n                    providers.name AS provider_name,\n                    users.name AS user_name,\n                    users.email AS user_email\n             FROM jobs\n             INNER JOIN providers ON providers.id = jobs.provider_id\n             INNER JOIN users ON users.id = jobs.user_id\n             WHERE jobs.id = :id\n             LIMIT 1",
+                "SELECT jobs.*,\n                    providers.key AS provider_key,\n                    providers.name AS provider_name,\n                    users.name AS user_name,\n                    users.email AS user_email\n             FROM jobs\n             INNER JOIN providers ON providers.id = jobs.provider_id\n             INNER JOIN users ON users.id = jobs.user_id\n             WHERE jobs.id = :id\n             LIMIT 1",
             ['id' => $jobId]
         );
 
@@ -256,7 +260,7 @@ final class Jobs
     public static function updatedSince(string $isoTimestamp, bool $isAdmin, int $userId, int $limit = 50, ?int $afterId = null): array
     {
         $limit = max(1, min(250, $limit));
-    $timestamp = $isoTimestamp !== '' ? $isoTimestamp : '1970-01-01T00:00:00.000000+00:00';
+        $timestamp = $isoTimestamp !== '' ? $isoTimestamp : '1970-01-01T00:00:00.000000+00:00';
 
         $params = ['since' => $timestamp];
         
@@ -277,7 +281,7 @@ final class Jobs
 
         $where = 'WHERE ' . implode(' AND ', $conditions);
 
-        $sql = "SELECT jobs.*,\n                    providers.key AS provider_key,\n                    providers.name AS provider_name,\n                    users.name AS user_name,\n                    users.email AS user_email\n             FROM jobs\n             INNER JOIN providers ON providers.id = jobs.provider_id\n             INNER JOIN users ON users.id = jobs.user_id\n             $where\n             ORDER BY jobs.updated_at ASC, jobs.id ASC\n             LIMIT $limit";
+            $sql = "SELECT jobs.*,\n                    providers.key AS provider_key,\n                    providers.name AS provider_name,\n                    users.name AS user_name,\n                    users.email AS user_email\n             FROM jobs\n             INNER JOIN providers ON providers.id = jobs.provider_id\n             INNER JOIN users ON users.id = jobs.user_id\n             $where\n             ORDER BY jobs.updated_at ASC, jobs.id ASC\n             LIMIT $limit";
 
         $statement = Db::run($sql, $params);
         $rows = $statement->fetchAll(PDO::FETCH_ASSOC);

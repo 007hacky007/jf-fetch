@@ -27,22 +27,24 @@ final class JobsPagedTest extends TestCase
         $this->assertSame(5, $page1['total']);
         $this->assertCount(3, $page1['rows']);
 
-        // Ensure newest created_at first ordering
-        $firstTs = $page1['rows'][0]['created_at'];
-        $secondTs = $page1['rows'][1]['created_at'];
-        $thirdTs = $page1['rows'][2]['created_at'];
-        $this->assertTrue($firstTs >= $secondTs, 'First row should be >= second by created_at DESC');
-        $this->assertTrue($secondTs >= $thirdTs, 'Second row should be >= third by created_at DESC');
+    // Status-first ordering keeps active downloads (priority ascending) on top
+    $page1Ids = array_map(static fn($row) => (int) $row['id'], $page1['rows']);
+    $page1Statuses = array_map(static fn($row) => (string) $row['status'], $page1['rows']);
+    $this->assertSame([2, 3, 4], $page1Ids);
+    $this->assertSame(['downloading', 'downloading', 'starting'], $page1Statuses);
 
         // Fetch second page
         $page2 = Jobs::listPaged(true, 1, false, 3, 3);
         $this->assertSame(5, $page2['total']);
         $this->assertCount(2, $page2['rows']);
 
+    $page2Ids = array_map(static fn($row) => (int) $row['id'], $page2['rows']);
+    $page2Statuses = array_map(static fn($row) => (string) $row['status'], $page2['rows']);
+    $this->assertSame([1, 5], $page2Ids);
+    $this->assertSame(['queued', 'completed'], $page2Statuses);
+
         // No overlap between pages (IDs distinct)
-        $idsPage1 = array_map(static fn($r) => (int) $r['id'], $page1['rows']);
-        $idsPage2 = array_map(static fn($r) => (int) $r['id'], $page2['rows']);
-        $this->assertSame([], array_intersect($idsPage1, $idsPage2));
+    $this->assertSame([], array_intersect($page1Ids, $page2Ids));
     }
 
     public function testListPagedRespectsMineOnlyAndAdminFalse(): void
@@ -140,7 +142,31 @@ final class JobsPagedTest extends TestCase
             :metadata_json, :deleted_at, :created_at, :updated_at
         )');
 
-        // Create five jobs with ascending created_at timestamps so DESC ordering is deterministic
+        // Create five jobs with varied statuses to exercise status-prioritized ordering
+        $statuses = [
+            1 => 'queued',
+            2 => 'downloading',
+            3 => 'downloading',
+            4 => 'starting',
+            5 => 'completed',
+        ];
+
+        $priorities = [
+            1 => 250,
+            2 => 10,
+            3 => 20,
+            4 => 30,
+            5 => 500,
+        ];
+
+        $positions = [
+            1 => 40,
+            2 => 5,
+            3 => 6,
+            4 => 30,
+            5 => 50,
+        ];
+
         for ($i = 1; $i <= 5; $i++) {
             $created = $now->modify('+' . $i . ' minutes');
             $insertJob->execute([
@@ -151,12 +177,12 @@ final class JobsPagedTest extends TestCase
                 'title' => 'Job #' . $i,
                 'source_url' => 'https://example.test/file' . $i,
                 'category' => null,
-                'status' => 'queued',
-                'progress' => 0,
-                'speed_bps' => null,
-                'eta_seconds' => null,
-                'priority' => 100 + $i,
-                'position' => $i,
+                'status' => $statuses[$i] ?? 'queued',
+                'progress' => $statuses[$i] === 'downloading' ? 25 : 0,
+                'speed_bps' => $statuses[$i] === 'downloading' ? 1500000 : null,
+                'eta_seconds' => $statuses[$i] === 'downloading' ? 900 : null,
+                'priority' => $priorities[$i] ?? 100,
+                'position' => $positions[$i] ?? $i,
                 'aria2_gid' => null,
                 'tmp_path' => null,
                 'final_path' => null,

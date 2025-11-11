@@ -674,27 +674,51 @@ export function normalizeJob(job) {
 }
 
 function compareJobs(a, b) {
-	// Primary sort: most recently created first (newest at top)
-	const createdA = parseIsoDate(a?.created_at ?? 0)?.getTime();
-	const createdB = parseIsoDate(b?.created_at ?? 0)?.getTime();
-	if (Number.isFinite(createdA) && Number.isFinite(createdB) && createdA !== createdB) {
-		return createdB - createdA; // descending by created_at
+	const weightDiff = statusWeight(a?.status) - statusWeight(b?.status);
+	if (weightDiff !== 0) {
+		return weightDiff;
 	}
 
-	// Fallback: lower priority value still means higher precedence (retain original semantics)
 	const priorityDiff = Number(a?.priority ?? 0) - Number(b?.priority ?? 0);
 	if (priorityDiff !== 0) {
 		return priorityDiff;
 	}
 
-	// Next: explicit queue position if provided
 	const positionDiff = Number(a?.position ?? 0) - Number(b?.position ?? 0);
 	if (positionDiff !== 0) {
 		return positionDiff;
 	}
 
-	// Final tie-breaker: higher id treated as newer
-	return Number(b?.id ?? 0) - Number(a?.id ?? 0);
+	const createdA = parseIsoDate(a?.created_at ?? 0)?.getTime();
+	const createdB = parseIsoDate(b?.created_at ?? 0)?.getTime();
+	if (Number.isFinite(createdA) && Number.isFinite(createdB) && createdA !== createdB) {
+		return createdA - createdB; // older first for stability
+	}
+
+	return Number(a?.id ?? 0) - Number(b?.id ?? 0);
+}
+
+function statusWeight(status) {
+	switch ((status ?? '').toLowerCase()) {
+		case 'downloading':
+			return 0;
+		case 'starting':
+			return 1;
+		case 'paused':
+			return 2;
+		case 'queued':
+			return 3;
+		case 'completed':
+			return 4;
+		case 'failed':
+			return 5;
+		case 'canceled':
+			return 6;
+		case 'deleted':
+			return 7;
+		default:
+			return 8;
+	}
 }
 
 function sortJobsInPlace(jobs) {
