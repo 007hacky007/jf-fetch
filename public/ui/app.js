@@ -336,6 +336,7 @@ function wireKraska() {
 			state.kraska.selected.delete(cacheKey);
 		}
 		updateKraskaQueueButton();
+		updateKraskaSelectAllCheckbox();
 	});
 
 	els.kraskaBreadcrumbs?.addEventListener('click', (event) => {
@@ -348,6 +349,13 @@ function wireKraska() {
 		const crumb = state.kraska.trail[index];
 		if (!crumb) return;
 		loadKraskaMenu(crumb.path, { trailIndex: index });
+	});
+
+	els.kraskaSelectAll?.addEventListener('change', (event) => {
+		const target = event.target;
+		if (!(target instanceof HTMLInputElement)) return;
+		target.indeterminate = false;
+		setKraskaSelectAll(Boolean(target.checked));
 	});
 }
 
@@ -1038,6 +1046,7 @@ function renderKraskaMenu() {
 	renderKraskaBreadcrumbs();
 	updateKraskaBackButton();
 	updateKraskaQueueButton();
+	updateKraskaSelectAllCheckbox();
 	renderKraskaCacheMeta();
 	updateKraskaRefreshButton();
 	if (els.kraskaHomeBtn) {
@@ -1281,6 +1290,69 @@ function updateKraskaQueueButton() {
 	}
 }
 
+function updateKraskaSelectAllCheckbox() {
+	const selectAll = els.kraskaSelectAll;
+	if (!selectAll) return;
+
+	const selectableKeys = getSelectableKraskaKeys();
+	if (selectableKeys.length === 0) {
+		selectAll.checked = false;
+		selectAll.indeterminate = false;
+		selectAll.setAttribute('disabled', 'true');
+		return;
+	}
+
+	selectAll.removeAttribute('disabled');
+	let selectedCount = 0;
+	for (const key of selectableKeys) {
+		if (state.kraska.selected.has(key)) {
+			selectedCount++;
+		}
+	}
+
+	if (selectedCount === 0) {
+		selectAll.checked = false;
+		selectAll.indeterminate = false;
+		return;
+	}
+
+	if (selectedCount === selectableKeys.length) {
+		selectAll.checked = true;
+		selectAll.indeterminate = false;
+		return;
+	}
+
+	selectAll.checked = false;
+	selectAll.indeterminate = true;
+}
+
+function setKraskaSelectAll(checked) {
+	const keys = getSelectableKraskaKeys();
+	const keySet = new Set(keys);
+	state.kraska.selected = checked ? keySet : new Set();
+
+	if (els.kraskaList) {
+		els.kraskaList.querySelectorAll('input[type="checkbox"][data-kraska-select]').forEach((element) => {
+			if (!(element instanceof HTMLInputElement)) return;
+			const key = element.dataset.kraskaSelect ?? '';
+			element.checked = checked && keySet.has(key);
+		});
+	}
+
+	updateKraskaQueueButton();
+	updateKraskaSelectAllCheckbox();
+}
+
+function getSelectableKraskaKeys() {
+	if (!Array.isArray(state.kraska.items)) {
+		return [];
+	}
+
+	return state.kraska.items
+		.filter((item) => item && typeof item.cacheKey === 'string' && item.cacheKey !== '' && item.selectable !== false)
+		.map((item) => String(item.cacheKey));
+}
+
 async function queueSelectedKraska() {
 	if (state.isQueueSubmitting || state.kraska.selected.size === 0) return;
 	const selections = Array.from(state.kraska.selected)
@@ -1301,6 +1373,7 @@ async function queueSelectedKraska() {
 		showToast('Nothing to queue.', 'warning');
 		state.kraska.selected.clear();
 		updateKraskaQueueButton();
+		updateKraskaSelectAllCheckbox();
 		return;
 	}
 
@@ -1368,6 +1441,7 @@ async function queueSelectedKraska() {
 		});
 		showToast(`Queued ${payloadItems.length} item${payloadItems.length === 1 ? '' : 's'}.`, 'success');
 		state.kraska.selected.clear();
+		updateKraskaSelectAllCheckbox();
 		loadJobs();
 	} catch (error) {
 		showToast(messageFromError(error), 'error');
@@ -1377,6 +1451,7 @@ async function queueSelectedKraska() {
 			els.kraskaQueueBtn.removeAttribute('disabled');
 		}
 		updateKraskaQueueButton();
+		updateKraskaSelectAllCheckbox();
 	}
 }
 

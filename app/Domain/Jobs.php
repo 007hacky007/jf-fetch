@@ -133,8 +133,10 @@ final class Jobs
             'tmp_path' => isset($row['tmp_path']) && $row['tmp_path'] !== null ? (string) $row['tmp_path'] : null,
         ];
 
-        // File size (bytes) if final file exists
-        if (isset($row['final_path']) && is_string($row['final_path']) && $row['final_path'] !== '' && is_file($row['final_path'])) {
+        // File size (bytes) preferring cached value in database
+        if (isset($row['file_size_bytes']) && is_numeric($row['file_size_bytes'])) {
+            $payload['file_size_bytes'] = (int) $row['file_size_bytes'];
+        } elseif (isset($row['final_path']) && is_string($row['final_path']) && $row['final_path'] !== '' && is_file($row['final_path'])) {
             $size = @filesize($row['final_path']);
             if (is_int($size) && $size >= 0) {
                 $payload['file_size_bytes'] = $size;

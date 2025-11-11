@@ -30,6 +30,10 @@ export function wireJobs() {
 		retryFailedJobs(24);
 	});
 
+	els.cancelAllQueuedBtn?.addEventListener('click', () => {
+		cancelAllQueuedJobs();
+	});
+
 	els.jobsList?.addEventListener('click', (event) => {
 		const target = event.target;
 		if (!(target instanceof HTMLElement)) return;
@@ -830,5 +834,34 @@ async function retryFailedJobs(hours) {
 	} catch (error) {
 		const message = messageFromError(error);
 		showToast(message || 'Failed to retry jobs.', 'error');
+	}
+}
+
+async function cancelAllQueuedJobs() {
+	const scope = state.showMyJobs ? 'all of your queued jobs' : 'all queued jobs';
+	const confirmation = `Cancel ${scope}?`;
+	if (!confirm(confirmation)) {
+		return;
+	}
+
+	const params = new URLSearchParams();
+	if (state.showMyJobs) {
+		params.set('mine_only', '1');
+	}
+	const query = params.toString();
+	const url = query ? `${API.jobCancelAll}?${query}` : API.jobCancelAll;
+
+	try {
+		const response = await fetchJson(url, {
+			method: 'POST',
+		});
+		const canceledCount = response?.data?.canceled_count ?? 0;
+		const message = response?.data?.message ?? `Canceled ${canceledCount} queued job${canceledCount === 1 ? '' : 's'}.`;
+		showToast(message, canceledCount > 0 ? 'success' : 'info');
+		if (canceledCount > 0) {
+			await loadJobs();
+		}
+	} catch (error) {
+		showToast(`Failed to cancel jobs: ${messageFromError(error)}`, 'error');
 	}
 }

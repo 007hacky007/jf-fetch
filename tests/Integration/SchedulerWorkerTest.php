@@ -121,6 +121,7 @@ final class SchedulerWorkerTest extends TestCase
             eta_seconds INTEGER,
             tmp_path TEXT,
             final_path TEXT,
+            file_size_bytes INTEGER,
             error_text TEXT,
             metadata_json TEXT,
             created_at TEXT,

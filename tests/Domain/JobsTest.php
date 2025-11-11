@@ -172,6 +172,7 @@ final class JobsTest extends TestCase
             aria2_gid TEXT NULL,
             tmp_path TEXT NULL,
             final_path TEXT NULL,
+            file_size_bytes INTEGER NULL,
             error_text TEXT NULL,
             metadata_json TEXT NULL,
             deleted_at TEXT NULL,

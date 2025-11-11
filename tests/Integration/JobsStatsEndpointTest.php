@@ -69,8 +69,9 @@ final class JobsStatsEndpointTest extends TestCase
         foreach ($completedIds as $cid) {
             $filePath = $this->configDir . '/file_' . $cid . '.bin';
             file_put_contents($filePath, str_repeat('A', $cid === 20 ? 1500 : 4096)); // 1500 + 4096 bytes
+            $size = filesize($filePath) ?: 0;
             Db::run(
-                'INSERT INTO jobs (id,user_id,provider_id,external_id,title,source_url,status,progress,priority,position,final_path,metadata_json,created_at,updated_at) VALUES (:id,1,1,:ext,:title,:src,\'completed\',100,0,:pos,:path,:metadata,:created,:updated)',
+                'INSERT INTO jobs (id,user_id,provider_id,external_id,title,source_url,status,progress,priority,position,final_path,file_size_bytes,metadata_json,created_at,updated_at) VALUES (:id,1,1,:ext,:title,:src,\'completed\',100,0,:pos,:path,:size,:metadata,:created,:updated)',
                 [
                     'id' => $cid,
                     'title' => 'Completed ' . $cid,
@@ -78,6 +79,7 @@ final class JobsStatsEndpointTest extends TestCase
                     'ext' => 'ext-' . $cid,
                     'src' => 'http://example.com/video-' . $cid,
                     'path' => $filePath,
+                    'size' => $size,
                     'metadata' => null,
                     'created' => $now,
                     'updated' => $now,
@@ -118,6 +120,7 @@ final class JobsStatsEndpointTest extends TestCase
             '/../../database/migrations/0001_initial_schema.sql',
             '/../../database/migrations/0004_add_deleted_status_to_jobs.sql',
             '/../../database/migrations/0005_add_metadata_json_to_jobs.sql',
+            '/../../database/migrations/0006_add_file_size_bytes_to_jobs.sql',
         ];
 
         foreach ($migrations as $relativePath) {
