@@ -22,6 +22,14 @@ export function wireJobs() {
 		loadJobs();
 	});
 
+	els.retryFailed4hBtn?.addEventListener('click', () => {
+		retryFailedJobs(4);
+	});
+
+	els.retryFailed24hBtn?.addEventListener('click', () => {
+		retryFailedJobs(24);
+	});
+
 	els.jobsList?.addEventListener('click', (event) => {
 		const target = event.target;
 		if (!(target instanceof HTMLElement)) return;
@@ -791,4 +799,36 @@ function isRecentJobEvent(event, job) {
 
 	// If we cannot determine, be conservative and suppress
 	return false;
+}
+
+async function retryFailedJobs(hours) {
+	if (![4, 24].includes(hours)) {
+		showToast('Invalid time window.', 'error');
+		return;
+	}
+
+	const confirmMessage = `Retry all failed jobs from the last ${hours} hours?`;
+	if (!confirm(confirmMessage)) {
+		return;
+	}
+
+	try {
+		const mineOnly = state.showMyJobs ? '1' : '0';
+		const response = await fetchJson(`${API.jobRetryFailed}?hours=${hours}&mine_only=${mineOnly}`, {
+			method: 'POST',
+		});
+
+		const retriedCount = response?.data?.retried_count ?? 0;
+		const message = response?.data?.message ?? `Retried ${retriedCount} job(s).`;
+		
+		showToast(message, 'success');
+		
+		// Reload jobs to show updated state
+		if (retriedCount > 0) {
+			loadJobs();
+		}
+	} catch (error) {
+		const message = messageFromError(error);
+		showToast(message || 'Failed to retry jobs.', 'error');
+	}
 }

@@ -141,10 +141,16 @@
                     <h3 class="text-lg font-semibold text-slate-100">Job queue</h3>
                     <p class="text-sm text-slate-400">Monitor progress, pause/resume, cancel, and reorder downloads.</p>
                   </div>
-                  <label class="inline-flex items-center gap-2 text-sm text-slate-300">
-                    <input id="jobs-mine-toggle" type="checkbox" class="rounded border-slate-600 bg-slate-800 text-brand-500 focus:ring-brand-500/60" />
-                    Show only my jobs
-                  </label>
+                  <div class="flex flex-col gap-2 sm:flex-row sm:items-center">
+                    <div class="flex items-center gap-2">
+                      <button id="retry-failed-4h-btn" type="button" class="rounded-lg border border-amber-600/60 bg-amber-500/10 px-3 py-1.5 text-xs font-semibold text-amber-300 transition hover:border-amber-500/80 hover:bg-amber-500/20 focus:outline-none focus:ring focus:ring-amber-500/40">Retry failed (4h)</button>
+                      <button id="retry-failed-24h-btn" type="button" class="rounded-lg border border-amber-600/60 bg-amber-500/10 px-3 py-1.5 text-xs font-semibold text-amber-300 transition hover:border-amber-500/80 hover:bg-amber-500/20 focus:outline-none focus:ring focus:ring-amber-500/40">Retry failed (24h)</button>
+                    </div>
+                    <label class="inline-flex items-center gap-2 text-sm text-slate-300">
+                      <input id="jobs-mine-toggle" type="checkbox" class="rounded border-slate-600 bg-slate-800 text-brand-500 focus:ring-brand-500/60" />
+                      Show only my jobs
+                    </label>
+                  </div>
                 </div>
                 <div id="jobs-summary" class="mb-4 text-sm text-slate-400"></div>
                 <div id="jobs-empty" class="hidden rounded-xl border border-dashed border-slate-700/60 p-8 text-center text-sm text-slate-400">No jobs yet. Queue something from the Search tab.</div>
