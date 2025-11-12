@@ -7,6 +7,7 @@ namespace App\Tests\Integration;
 require_once __DIR__ . '/../Support/Require.php';
 
 use App\Infra\Config;
+use App\Providers\KraSkApiException;
 use App\Tests\TestCase;
 use PDO;
 
@@ -80,6 +81,41 @@ final class SchedulerWorkerTest extends TestCase
 
         $notificationCount = (int) $this->pdo->query('SELECT COUNT(*) FROM notifications')->fetchColumn();
         $this->assertSame(1, $notificationCount);
+    }
+
+    public function testKraskaObjectNotFoundDetectionFromMessage(): void
+    {
+        $this->assertFalse(\isKraskaObjectNotFound(new \RuntimeException('Some other error')));
+
+        $exception = new \RuntimeException('Failed to enqueue job: Kra.sk API error: Code 1210: object not found');
+        $this->assertTrue(\isKraskaObjectNotFound($exception));
+
+        $context = \kraskaExceptionContext($exception);
+        $this->assertNull($context['status_code']);
+        $this->assertNull($context['endpoint']);
+        $this->assertIsString($context['response_preview']);
+        $this->assertStringContainsString('1210', (string) $context['response_preview']);
+    }
+
+    public function testKraskaObjectNotFoundDetectionFromResponseBody(): void
+    {
+        $apiException = new KraSkApiException(
+            422,
+            '/api/file/download',
+            ['data' => ['ident' => 'kra-999']],
+            'https://api.kra.sk/api/file/download',
+            '{"error":1210,"message":"object not found"}'
+        );
+
+        $wrapper = new \RuntimeException('Wrapper', 0, $apiException);
+
+        $this->assertTrue(\isKraskaObjectNotFound($wrapper));
+
+        $context = \kraskaExceptionContext($wrapper);
+        $this->assertSame(422, $context['status_code']);
+        $this->assertSame('/api/file/download', $context['endpoint']);
+        $this->assertIsString($context['response_preview']);
+        $this->assertStringContainsString('1210', (string) $context['response_preview']);
     }
 
     private function createSchema(PDO $pdo): void

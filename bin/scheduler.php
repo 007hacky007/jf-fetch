@@ -339,6 +339,24 @@ function processJob(array $job, array $providerRow, Aria2Client $aria2): void
 			);
 		}
 
+		if ($providerKey === 'kraska' && isKraskaObjectNotFound($exception)) {
+			$backoffSeconds = getKraskaBackoffSeconds();
+			$context = kraskaExceptionContext($exception);
+			$context['reason'] = 'object_not_found';
+			$context['error_code'] = 1210;
+			$context['job_external_id'] = $job['external_id'] ?? null;
+			$context['job_title'] = $job['title'] ?? null;
+
+			throw new ProviderBackoffException(
+				'kraska',
+				(int) $job['provider_id'],
+				$backoffSeconds,
+				'Kra.sk API reported object not found (code 1210).',
+				$context,
+				$exception
+			);
+		}
+
 		$details = [
 			'exception_class' => $exception::class,
 			'job_external_id' => $job['external_id'] ?? null,
@@ -646,6 +664,85 @@ function isKraskaInvalidIdent(KraSkApiException $exception): bool
 	}
 
 	return false;
+}
+
+function kraskaStringIndicatesObjectNotFound(string $value): bool
+{
+	$normalized = strtolower($value);
+
+	if (str_contains($normalized, 'object not found')) {
+		return true;
+	}
+
+	return preg_match('/\b1210\b/', $normalized) === 1;
+}
+
+function isKraskaObjectNotFound(Throwable $exception): bool
+{
+	for ($cursor = $exception; $cursor !== null; $cursor = $cursor->getPrevious()) {
+		$message = $cursor->getMessage();
+		if ($message !== '' && kraskaStringIndicatesObjectNotFound($message)) {
+			return true;
+		}
+
+		if ($cursor instanceof KraSkApiException) {
+			$body = $cursor->getResponseBody();
+			if (is_string($body) && $body !== '') {
+				if (kraskaStringIndicatesObjectNotFound($body)) {
+					return true;
+				}
+
+				$decoded = json_decode($body, true);
+				if (is_array($decoded)) {
+					$errorCode = $decoded['error'] ?? $decoded['code'] ?? null;
+					if (is_numeric($errorCode) && (int) $errorCode === 1210) {
+						return true;
+					}
+					$messageField = $decoded['msg'] ?? $decoded['message'] ?? null;
+					if (is_string($messageField) && kraskaStringIndicatesObjectNotFound($messageField)) {
+						return true;
+					}
+				}
+			}
+		}
+	}
+
+	return false;
+}
+
+/**
+ * @return array{status_code: int|null, endpoint: string|null, response_preview: string|null}
+ */
+function kraskaExceptionContext(Throwable $exception): array
+{
+	$statusCode = null;
+	$endpoint = null;
+	$responsePreview = null;
+
+	for ($cursor = $exception; $cursor !== null; $cursor = $cursor->getPrevious()) {
+		if ($cursor instanceof KraSkApiException) {
+			$statusCode = $cursor->getStatusCode();
+			$endpoint = $cursor->getEndpoint();
+			$body = $cursor->getResponseBody();
+			if (is_string($body) && $body !== '') {
+				$responsePreview = substr($body, 0, 500);
+			}
+			break;
+		}
+	}
+
+	if ($responsePreview === null) {
+		$message = $exception->getMessage();
+		if ($message !== '') {
+			$responsePreview = substr($message, 0, 500);
+		}
+	}
+
+	return [
+		'status_code' => $statusCode,
+		'endpoint' => $endpoint,
+		'response_preview' => $responsePreview,
+	];
 }
 
 /**
