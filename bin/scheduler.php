@@ -7,6 +7,7 @@ use App\Infra\Audit;
 use App\Infra\Config;
 use App\Infra\Db;
 use App\Infra\ProviderBackoff;
+use App\Infra\ProviderPause;
 use App\Infra\ProviderSecrets;
 use App\Providers\VideoProvider;
 use App\Providers\WebshareProvider;
@@ -136,9 +137,21 @@ function runSchedulerLoop(string $root): void
 				}
 			}
 
+			$pausedProviderIds = ProviderPause::providerIds();
+			if ($pausedProviderIds !== []) {
+				$skipProviderIds = array_merge($skipProviderIds, $pausedProviderIds);
+			}
+			if ($skipProviderIds !== []) {
+				$skipProviderIds = array_values(array_unique($skipProviderIds));
+			}
+
 			$job = claimNextJob($skipProviderIds);
 			if ($job === null) {
-				sleepWithLog($loopDelaySeconds, 'No queued jobs found.');
+				if ($pausedProviderIds !== []) {
+					sleepWithLog($loopDelaySeconds, 'No queued jobs found (some providers paused).');
+				} else {
+					sleepWithLog($loopDelaySeconds, 'No queued jobs found.');
+				}
 				continue;
 			}
 

@@ -6,6 +6,7 @@ namespace App\Api;
 
 use App\Domain\Jobs;
 use App\Infra\ProviderBackoff;
+use App\Infra\ProviderPause;
 
 final class JobsList
 {
@@ -35,6 +36,7 @@ final class JobsList
                 'offset' => $offset,
                 'has_more' => $hasMore,
                 'provider_backoff' => ProviderBackoff::active(),
+                'provider_paused' => ProviderPause::active(),
             ];
             return [
                 'data' => $data,
@@ -47,6 +49,7 @@ final class JobsList
             'data' => $data,
             'meta' => [
                 'provider_backoff' => ProviderBackoff::active(),
+                'provider_paused' => ProviderPause::active(),
             ],
         ];
     }

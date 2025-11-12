@@ -158,6 +158,8 @@ export const API = {
 	providerUpdate: '/api/providers/update',
 	providerDelete: '/api/providers/delete',
 	providerTest: '/api/providers/test',
+	providerPause: '/api/providers/pause',
+	providerResume: '/api/providers/resume',
 	providersStatusAll: '/api/providers/status_all',
 	search: '/api/search',
 	kraskaMenu: '/api/providers/kraska/menu',

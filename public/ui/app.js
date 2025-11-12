@@ -382,6 +382,14 @@ function wireAdmin() {
 		if (target.matches('[data-provider-test]')) {
 			testProvider(providerId);
 		}
+
+		if (target.matches('[data-provider-pause]')) {
+			pauseProvider(providerId);
+		}
+
+		if (target.matches('[data-provider-resume]')) {
+			resumeProvider(providerId);
+		}
 	});
 
 	els.auditRefreshBtn?.addEventListener('click', () => loadAudit(true));
@@ -2534,6 +2542,34 @@ function renderProviderCard(provider) {
 	const configEntries = Object.entries(provider.config ?? {})
 		.map(([key, value]) => `<div class="flex justify-between text-sm text-slate-300"><span class="font-medium text-slate-200">${escapeHtml(key)}</span><span>${escapeHtml(String(value ?? ''))}</span></div>`)
 		.join('');
+	const paused = provider.paused === true;
+	const pauseInfo = provider.pause ?? null;
+	const statusLabel = paused ? 'Paused' : provider.enabled ? 'Enabled' : 'Disabled';
+	const statusTextClass = paused ? 'text-amber-300' : provider.enabled ? 'text-emerald-300' : 'text-rose-300';
+	const statusDotClass = paused ? 'bg-amber-400' : provider.enabled ? 'bg-emerald-400' : 'bg-rose-400';
+	const pauseMetaParts = [];
+	if (pauseInfo && pauseInfo.paused_at) {
+		const since = formatRelativeTime(pauseInfo.paused_at);
+		if (since) pauseMetaParts.push(`since ${escapeHtml(since)}`);
+	}
+	if (pauseInfo && (pauseInfo.paused_by || pauseInfo.paused_by_name)) {
+		const by = pauseInfo.paused_by ?? pauseInfo.paused_by_name;
+		if (by) pauseMetaParts.push(`by ${escapeHtml(String(by))}`);
+	}
+	const pauseNote = pauseInfo && pauseInfo.note ? escapeHtml(String(pauseInfo.note)) : null;
+	const pauseDetails = paused
+		? `<div class="mt-3 rounded-lg border border-amber-500/40 bg-amber-500/15 p-3 text-xs text-amber-100">Jobs for this provider remain queued until resumed.${pauseMetaParts.length > 0 ? ` <span class="block mt-1 opacity-80">${pauseMetaParts.join(' · ')}</span>` : ''}${pauseNote ? ` <span class="block mt-1 opacity-80">Note: ${pauseNote}</span>` : ''}</div>`
+		: '';
+
+	const actionButtons = [];
+	actionButtons.push('<button type="button" data-provider-test class="rounded-lg border border-slate-700/60 bg-slate-950/60 px-3 py-1.5 text-xs font-semibold text-slate-200 transition hover:border-brand-400/60 hover:text-brand-200">Test</button>');
+	actionButtons.push('<button type="button" data-provider-edit class="rounded-lg border border-brand-500/40 bg-brand-500/20 px-3 py-1.5 text-xs font-semibold text-brand-100 transition hover:bg-brand-500/30">Edit</button>');
+	actionButtons.push('<button type="button" data-provider-delete class="rounded-lg border border-rose-500/40 bg-rose-500/20 px-3 py-1.5 text-xs font-semibold text-rose-100 transition hover:bg-rose-500/30">Delete</button>');
+	if (paused) {
+		actionButtons.unshift('<button type="button" data-provider-resume class="rounded-lg border border-emerald-500/40 bg-emerald-500/20 px-3 py-1.5 text-xs font-semibold text-emerald-100 transition hover:bg-emerald-500/30">Resume</button>');
+	} else {
+		actionButtons.unshift('<button type="button" data-provider-pause class="rounded-lg border border-amber-500/40 bg-amber-500/20 px-3 py-1.5 text-xs font-semibold text-amber-100 transition hover:bg-amber-500/30">Pause</button>');
+	}
 
 	return `
 		<li data-provider-id="${provider.id}" class="rounded-2xl border border-slate-800/70 bg-slate-900/50 p-5">
@@ -2541,21 +2577,18 @@ function renderProviderCard(provider) {
 				<div>
 					<h4 class="text-lg font-semibold text-slate-100">${escapeHtml(provider.name ?? provider.key)}</h4>
 					<div class="text-sm text-slate-400">Key: ${escapeHtml(provider.key)}</div>
-					<div class="mt-2 flex items-center gap-2 text-xs uppercase tracking-wide ${provider.enabled ? 'text-emerald-300' : 'text-rose-300'}">
-						<span class="inline-flex h-2 w-2 rounded-full ${provider.enabled ? 'bg-emerald-400' : 'bg-rose-400'}"></span>
-						${provider.enabled ? 'Enabled' : 'Disabled'}
+					<div class="mt-2 flex items-center gap-2 text-xs uppercase tracking-wide ${statusTextClass}">
+						<span class="inline-flex h-2 w-2 rounded-full ${statusDotClass}"></span>
+						${statusLabel}
 					</div>
 				</div>
-				<div class="flex flex-wrap gap-2">
-					<button type="button" data-provider-test class="rounded-lg border border-slate-700/60 bg-slate-950/60 px-3 py-1.5 text-xs font-semibold text-slate-200 transition hover:border-brand-400/60 hover:text-brand-200">Test</button>
-					<button type="button" data-provider-edit class="rounded-lg border border-brand-500/40 bg-brand-500/20 px-3 py-1.5 text-xs font-semibold text-brand-100 transition hover:bg-brand-500/30">Edit</button>
-					<button type="button" data-provider-delete class="rounded-lg border border-rose-500/40 bg-rose-500/20 px-3 py-1.5 text-xs font-semibold text-rose-100 transition hover:bg-rose-500/30">Delete</button>
-				</div>
+				<div class="flex flex-wrap gap-2">${actionButtons.join('')}</div>
 			</div>
 			<dl class="mt-4 grid gap-2 text-xs text-slate-400">
 				<div class="flex justify-between"><span>Updated</span><span>${formatRelativeTime(provider.updated_at)}</span></div>
 				<div class="flex justify-between"><span>Created</span><span>${formatRelativeTime(provider.created_at)}</span></div>
 			</dl>
+			${pauseDetails}
 			${configEntries ? `<div class="mt-4 space-y-2 border-t border-slate-800/60 pt-4">${configEntries}</div>` : ''}
 		</li>
 	`;
@@ -3524,6 +3557,47 @@ async function openProviderModal(provider) {
 	});
 
 	els.modal.showModal();
+}
+
+async function pauseProvider(providerId) {
+	const provider = state.providers.find((p) => Number(p.id) === Number(providerId));
+	const existingNote = provider?.pause?.note ?? '';
+	const noteInput = window.prompt('Optional note for pausing this provider:', existingNote || '');
+	if (noteInput === null) return;
+	const payload = { id: providerId };
+	const trimmedNote = noteInput.trim();
+	if (trimmedNote !== '') {
+		payload.note = trimmedNote;
+	}
+	try {
+		await fetchJson(API.providerPause, {
+			method: 'POST',
+			body: JSON.stringify(payload),
+		});
+		showToast('Provider paused.', 'warning');
+		await loadProviders();
+		if (state.currentView === 'queue') {
+			loadJobs().catch(() => {});
+		}
+	} catch (error) {
+		showToast(`Failed to pause provider: ${messageFromError(error)}`, 'error');
+	}
+}
+
+async function resumeProvider(providerId) {
+	try {
+		await fetchJson(API.providerResume, {
+			method: 'POST',
+			body: JSON.stringify({ id: providerId }),
+		});
+		showToast('Provider resumed.', 'success');
+		await loadProviders();
+		if (state.currentView === 'queue') {
+			loadJobs().catch(() => {});
+		}
+	} catch (error) {
+		showToast(`Failed to resume provider: ${messageFromError(error)}`, 'error');
+	}
 }
 
 async function confirmProviderDelete(providerId) {

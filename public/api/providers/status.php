@@ -7,6 +7,7 @@ use App\Infra\Config;
 use App\Infra\Db;
 use App\Infra\Http;
 use App\Infra\ProviderSecrets;
+use App\Infra\ProviderPause;
 use App\Providers\VideoProvider;
 use App\Providers\StatusCapableProvider;
 use App\Providers\WebshareProvider;
@@ -53,6 +54,13 @@ if (!$provider instanceof StatusCapableProvider) {
 
 try {
     $status = $provider->status();
+    $pause = ProviderPause::find((string) $providerRow['key']);
+    if ($pause !== null) {
+        $status['paused'] = true;
+        $status['pause'] = $pause;
+    } else {
+        $status['paused'] = $status['paused'] ?? false;
+    }
     Http::json(200, ['data' => $status]);
 } catch (Throwable $e) {
     Http::error(500, 'Failed to retrieve status', ['detail' => $e->getMessage()]);

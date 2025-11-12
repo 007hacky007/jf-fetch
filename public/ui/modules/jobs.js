@@ -18,7 +18,22 @@ let dragSourceId = null;
 const QUEUE_STATUSES = new Set(['downloading', 'starting', 'queued', 'paused']);
 
 export function applyProviderAlerts(alerts) {
-	state.providerAlerts = Array.isArray(alerts) ? alerts.filter(Boolean) : [];
+	const normalized = Array.isArray(alerts)
+		? alerts
+			.filter(Boolean)
+			.map(normalizeProviderAlert)
+			.filter(Boolean)
+		: [];
+	const unique = [];
+	const seen = new Set();
+	for (const alert of normalized) {
+		const key = `${alert.type || 'unknown'}:${alert.provider}`;
+		if (!seen.has(key)) {
+			seen.add(key);
+			unique.push(alert);
+		}
+	}
+	state.providerAlerts = unique;
 	renderProviderAlerts();
 }
 
@@ -43,6 +58,15 @@ function renderProviderAlert(alert, index) {
 		return '';
 	}
 
+	const type = String(alert.type ?? 'backoff').toLowerCase();
+	if (type === 'paused') {
+		return renderPausedProviderAlert(alert, index);
+	}
+
+	return renderBackoffProviderAlert(alert, index);
+}
+
+function renderBackoffProviderAlert(alert, index) {
 	const baseClass = 'text-sm leading-relaxed text-amber-100';
 	const separatorClass = index === 0 ? '' : ' mt-2 pt-2 border-t border-amber-500/25';
 	const providerLabel = escapeHtml(String(alert.provider_label ?? alert.provider ?? 'Provider'));
@@ -58,6 +82,57 @@ function renderProviderAlert(alert, index) {
 	const jobLine = jobTitle ? `<span class="block text-xs text-amber-200/80">Last failing job: ${jobTitle}</span>` : '';
 
 	return `<div class="${baseClass}${separatorClass}"><strong class="font-semibold">${providerLabel}</strong> – ${message} ${retryText}${retryTime}.${jobLine ? ` ${jobLine}` : ''}</div>`;
+}
+
+function renderPausedProviderAlert(alert, index) {
+	const baseClass = 'text-sm leading-relaxed text-amber-100';
+	const separatorClass = index === 0 ? '' : ' mt-2 pt-2 border-t border-amber-500/25';
+	const providerLabel = escapeHtml(String(alert.provider_label ?? alert.provider ?? 'Provider'));
+	const pausedBy = alert.paused_by ?? alert.paused_by_name ?? alert.paused_by_email ?? null;
+	const pausedByLabel = pausedBy ? escapeHtml(String(pausedBy)) : null;
+	const pausedSinceRaw = typeof alert.paused_at === 'string' ? alert.paused_at : null;
+	const pausedSince = pausedSinceRaw ? formatRelativeTime(pausedSinceRaw) : null;
+	const pausedSinceLabel = pausedSince ? escapeHtml(pausedSince) : null;
+	const note = alert.note ? escapeHtml(String(alert.note)) : null;
+	const metaParts = [];
+	if (pausedByLabel) metaParts.push(`Paused by ${pausedByLabel}`);
+	if (pausedSinceLabel) metaParts.push(pausedSinceLabel);
+	const metaLine = metaParts.length > 0 ? metaParts.join(' · ') : 'Paused';
+
+	return `<div class="${baseClass}${separatorClass}"><strong class="font-semibold">${providerLabel}</strong> – Provider paused. <span class="block text-xs text-amber-200/80">${metaLine}. Jobs will remain queued until resumed.</span>${note ? `<span class="block text-xs text-amber-200/80">Note: ${note}</span>` : ''}</div>`;
+}
+
+function normalizeProviderAlert(alert) {
+	if (!alert || typeof alert !== 'object') {
+		return null;
+	}
+	const provider = String(alert.provider ?? alert.provider_key ?? alert.providerKey ?? '');
+	if (!provider) {
+		return null;
+	}
+	const type = String(alert.type ?? detectProviderAlertType(alert));
+	const providerLabel = alert.provider_label ?? alert.providerLabel ?? provider;
+	return {
+		...alert,
+		type,
+		provider,
+		provider_label: providerLabel,
+	};
+}
+
+function detectProviderAlertType(alert) {
+	if (alert && typeof alert === 'object' && typeof alert.type === 'string') {
+		return alert.type;
+	}
+	if (alert && typeof alert === 'object') {
+		if ('paused_at' in alert || 'note' in alert || 'paused_by' in alert || 'paused_by_name' in alert) {
+			return 'paused';
+		}
+		if ('retry_at' in alert || 'retry_in_seconds' in alert || 'retry_after_seconds' in alert) {
+			return 'backoff';
+		}
+	}
+	return 'backoff';
 }
 
 export function wireJobs() {
@@ -134,7 +209,9 @@ async function loadJobsPage(initial = false) {
 		const response = await fetchJson(`${API.jobsList}?${params.toString()}`);
 		const jobs = Array.isArray(response?.data) ? response.data : [];
 		const meta = response?.meta || {};
-		applyProviderAlerts(Array.isArray(meta.provider_backoff) ? meta.provider_backoff : []);
+		const backoffs = Array.isArray(meta.provider_backoff) ? meta.provider_backoff : [];
+		const pauses = Array.isArray(meta.provider_paused) ? meta.provider_paused : [];
+		applyProviderAlerts([...backoffs, ...pauses]);
 		const normalized = jobs.map((j) => normalizeJob(j)).filter(Boolean);
 		state.jobs.push(...normalized);
 		sortJobsInPlace(state.jobs); // ensure stable ordering relative to client expectations

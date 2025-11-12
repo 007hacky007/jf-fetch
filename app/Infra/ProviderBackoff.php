@@ -31,6 +31,7 @@ final class ProviderBackoff
         $retryAtEpoch = max(0, $retryAtEpoch);
         $nowIso = Clock::nowString();
         $record = [
+            'type' => 'backoff',
             'provider' => $providerKey,
             'provider_label' => $payload['provider_label'] ?? ucfirst($providerKey),
             'reason' => $payload['reason'] ?? null,
@@ -114,6 +115,7 @@ final class ProviderBackoff
                 continue;
             }
 
+            $decoded['type'] = $decoded['type'] ?? 'backoff';
             $decoded['provider'] = $decoded['provider'] ?? $provider;
             $decoded['provider_label'] = $decoded['provider_label'] ?? ucfirst($provider);
             $decoded['retry_at'] = $decoded['retry_at'] ?? self::formatIso($retryAt);

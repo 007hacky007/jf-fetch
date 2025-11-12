@@ -7,6 +7,7 @@ namespace App\Tests\Integration;
 require_once __DIR__ . '/../Support/Require.php';
 
 use App\Infra\Config;
+use App\Infra\ProviderPause;
 use App\Providers\KraSkApiException;
 use App\Tests\TestCase;
 use PDO;
@@ -81,6 +82,19 @@ final class SchedulerWorkerTest extends TestCase
 
         $notificationCount = (int) $this->pdo->query('SELECT COUNT(*) FROM notifications')->fetchColumn();
         $this->assertSame(1, $notificationCount);
+    }
+
+    public function testClaimSkipsPausedProviders(): void
+    {
+        ProviderPause::set('webshare', [
+            'provider_id' => 1,
+            'provider_label' => 'Webshare',
+            'paused_by' => 'Admin',
+            'paused_by_id' => 1,
+        ]);
+
+        $job = claimNextJob(ProviderPause::providerIds());
+        $this->assertNull($job);
     }
 
     public function testKraskaObjectNotFoundDetectionFromMessage(): void
@@ -181,6 +195,13 @@ final class SchedulerWorkerTest extends TestCase
             type TEXT,
             payload_json TEXT,
             created_at TEXT
+        )');
+
+        $pdo->exec('CREATE TABLE settings (
+            key TEXT PRIMARY KEY,
+            value TEXT,
+            type TEXT,
+            updated_at TEXT
         )');
     }
 

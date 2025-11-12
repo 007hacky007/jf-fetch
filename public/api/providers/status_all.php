@@ -7,6 +7,7 @@ use App\Infra\Config;
 use App\Infra\Db;
 use App\Infra\Http;
 use App\Infra\ProviderSecrets;
+use App\Infra\ProviderPause;
 use App\Providers\VideoProvider;
 use App\Providers\StatusCapableProvider;
 use App\Providers\WebshareProvider;
@@ -59,6 +60,13 @@ if ($cachedPayload !== null && !$forceRefresh) {
 // Build fresh statuses
 $providerRows = Db::run('SELECT * FROM providers ORDER BY id')->fetchAll();
 $statuses = [];
+ $pauseMap = [];
+foreach (ProviderPause::active() as $paused) {
+    $key = is_string($paused['provider'] ?? null) ? (string) $paused['provider'] : null;
+    if ($key !== null && $key !== '') {
+        $pauseMap[$key] = $paused;
+    }
+}
 if (is_array($providerRows)) {
     foreach ($providerRows as $row) {
         if (!is_array($row)) {
@@ -67,21 +75,31 @@ if (is_array($providerRows)) {
         try {
             $provider = buildProvider($row);
             if ($provider instanceof StatusCapableProvider) {
-                $statuses[] = $provider->status();
+                $status = $provider->status();
             } else {
-                $statuses[] = [
+                $status = [
                     'provider' => (string) $row['key'],
                     'authenticated' => false,
                     'error' => 'Status not implemented',
                 ];
             }
         } catch (Throwable $e) {
-            $statuses[] = [
+            $status = [
                 'provider' => isset($row['key']) ? (string) $row['key'] : 'unknown',
                 'authenticated' => false,
                 'error' => $e->getMessage(),
             ];
         }
+
+        $key = isset($status['provider']) ? (string) $status['provider'] : null;
+        if ($key !== null && isset($pauseMap[$key])) {
+            $status['paused'] = true;
+            $status['pause'] = $pauseMap[$key];
+        } else {
+            $status['paused'] = $status['paused'] ?? false;
+        }
+
+        $statuses[] = $status;
     }
 }
 

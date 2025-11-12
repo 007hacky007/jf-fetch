@@ -50,6 +50,8 @@ final class JobsListPaginationEndpointTest extends TestCase
         $this->assertTrue($payload['meta']['has_more']);
         $this->assertArrayHasKey('provider_backoff', $payload['meta']);
         $this->assertIsArray($payload['meta']['provider_backoff']);
+        $this->assertArrayHasKey('provider_paused', $payload['meta']);
+        $this->assertIsArray($payload['meta']['provider_paused']);
         $this->assertCount(3, $payload['data']);
     }
 
@@ -63,6 +65,8 @@ final class JobsListPaginationEndpointTest extends TestCase
         $this->assertFalse($p2['meta']['has_more']);
         $this->assertArrayHasKey('provider_backoff', $p2['meta']);
         $this->assertIsArray($p2['meta']['provider_backoff']);
+        $this->assertArrayHasKey('provider_paused', $p2['meta']);
+        $this->assertIsArray($p2['meta']['provider_paused']);
     }
 
     // Removed execute helper: using JobsList::handle directly to avoid emitting output during tests.
