@@ -56,6 +56,75 @@ final class JobsPagedTest extends TestCase
         $this->assertSame([2, 2], $ids);
     }
 
+    public function testListOrdersNonQueueStatusesByRecency(): void
+    {
+        $pdo = $this->connection();
+        $insertJob = $pdo->prepare('INSERT INTO jobs (
+            id, user_id, provider_id, external_id, title, source_url, category, status, progress, speed_bps,
+            eta_seconds, priority, position, aria2_gid, tmp_path, final_path, error_text, metadata_json, deleted_at,
+            created_at, updated_at
+        ) VALUES (
+            :id, :user_id, :provider_id, :external_id, :title, :source_url, :category, :status, :progress,
+            :speed_bps, :eta_seconds, :priority, :position, :aria2_gid, :tmp_path, :final_path, :error_text,
+            :metadata_json, :deleted_at, :created_at, :updated_at
+        )');
+
+        $base = new DateTimeImmutable('2025-02-01T00:00:00+00:00');
+
+        $insertJob->execute([
+            'id' => 6,
+            'user_id' => 1,
+            'provider_id' => 1,
+            'external_id' => 'ext-6',
+            'title' => 'Old Failed',
+            'source_url' => 'https://example.test/file6',
+            'category' => null,
+            'status' => 'failed',
+            'progress' => 0,
+            'speed_bps' => null,
+            'eta_seconds' => null,
+            'priority' => 10,
+            'position' => 1,
+            'aria2_gid' => null,
+            'tmp_path' => null,
+            'final_path' => null,
+            'error_text' => 'Failure 6',
+            'metadata_json' => null,
+            'deleted_at' => null,
+            'created_at' => $base->format('Y-m-d\TH:i:s.uP'),
+            'updated_at' => $base->format('Y-m-d\TH:i:s.uP'),
+        ]);
+
+        $insertJob->execute([
+            'id' => 7,
+            'user_id' => 1,
+            'provider_id' => 1,
+            'external_id' => 'ext-7',
+            'title' => 'New Failed',
+            'source_url' => 'https://example.test/file7',
+            'category' => null,
+            'status' => 'failed',
+            'progress' => 0,
+            'speed_bps' => null,
+            'eta_seconds' => null,
+            'priority' => 999,
+            'position' => 999,
+            'aria2_gid' => null,
+            'tmp_path' => null,
+            'final_path' => null,
+            'error_text' => 'Failure 7',
+            'metadata_json' => null,
+            'deleted_at' => null,
+            'created_at' => $base->modify('+5 minutes')->format('Y-m-d\TH:i:s.uP'),
+            'updated_at' => $base->modify('+5 minutes')->format('Y-m-d\TH:i:s.uP'),
+        ]);
+
+        $rows = Jobs::list(true, 1, false);
+        $failedIds = array_values(array_map(static fn($row) => (int) $row['id'], array_filter($rows, static fn($row) => ($row['status'] ?? '') === 'failed')));
+
+        $this->assertSame([7, 6], $failedIds);
+    }
+
     private function createSchema(): void
     {
         $pdo = $this->connection();

@@ -30,10 +30,12 @@ final class Jobs
             $params['user_id'] = $userId;
         }
 
-        $statusOrder = "CASE jobs.status\n                WHEN 'downloading' THEN 0\n                WHEN 'starting' THEN 1\n                WHEN 'paused' THEN 2\n                WHEN 'queued' THEN 3\n                WHEN 'completed' THEN 4\n                WHEN 'failed' THEN 5\n                WHEN 'canceled' THEN 6\n                WHEN 'deleted' THEN 7\n                ELSE 8\n            END";
+    $statusOrder = "CASE jobs.status\n                WHEN 'downloading' THEN 0\n                WHEN 'starting' THEN 1\n                WHEN 'queued' THEN 2\n                WHEN 'paused' THEN 3\n                WHEN 'completed' THEN 4\n                WHEN 'failed' THEN 5\n                WHEN 'canceled' THEN 6\n                WHEN 'deleted' THEN 7\n                ELSE 8\n            END";
+    $priorityOrder = "CASE\n                WHEN jobs.status IN ('downloading','starting','queued','paused') THEN jobs.priority\n                ELSE 1000000\n            END";
+    $positionOrder = "CASE\n                WHEN jobs.status IN ('downloading','starting','queued','paused') THEN jobs.position\n                ELSE 1000000\n            END";
 
-        $statement = Db::run(
-                "SELECT jobs.*,\n                    providers.key AS provider_key,\n                    providers.name AS provider_name,\n                    users.name AS user_name,\n                    users.email AS user_email\n             FROM jobs\n             INNER JOIN providers ON providers.id = jobs.provider_id\n             INNER JOIN users ON users.id = jobs.user_id\n             $where\n             ORDER BY $statusOrder ASC, jobs.priority ASC, jobs.position ASC, jobs.created_at ASC, jobs.id ASC",
+    $statement = Db::run(
+        "SELECT jobs.*,\n                    providers.key AS provider_key,\n                    providers.name AS provider_name,\n                    users.name AS user_name,\n                    users.email AS user_email\n             FROM jobs\n             INNER JOIN providers ON providers.id = jobs.provider_id\n             INNER JOIN users ON users.id = jobs.user_id\n             $where\n             ORDER BY $statusOrder ASC, $priorityOrder ASC, $positionOrder ASC, jobs.created_at DESC, jobs.id DESC",
             $params
         );
 
@@ -68,9 +70,11 @@ final class Jobs
         $total = $countRow !== false ? (int) ($countRow['cnt'] ?? 0) : 0;
 
         // Match UI ordering: active downloads first, then priority/position/created_at/id for stability.
-        $statusOrder = "CASE jobs.status\n                WHEN 'downloading' THEN 0\n                WHEN 'starting' THEN 1\n                WHEN 'paused' THEN 2\n                WHEN 'queued' THEN 3\n                WHEN 'completed' THEN 4\n                WHEN 'failed' THEN 5\n                WHEN 'canceled' THEN 6\n                WHEN 'deleted' THEN 7\n                ELSE 8\n            END";
+        $statusOrder = "CASE jobs.status\n                WHEN 'downloading' THEN 0\n                WHEN 'starting' THEN 1\n                WHEN 'queued' THEN 2\n                WHEN 'paused' THEN 3\n                WHEN 'completed' THEN 4\n                WHEN 'failed' THEN 5\n                WHEN 'canceled' THEN 6\n                WHEN 'deleted' THEN 7\n                ELSE 8\n            END";
+        $priorityOrder = "CASE\n                WHEN jobs.status IN ('downloading','starting','queued','paused') THEN jobs.priority\n                ELSE 1000000\n            END";
+        $positionOrder = "CASE\n                WHEN jobs.status IN ('downloading','starting','queued','paused') THEN jobs.position\n                ELSE 1000000\n            END";
 
-    $sql = "SELECT jobs.*,\n                    providers.key AS provider_key,\n                    providers.name AS provider_name,\n                    users.name AS user_name,\n                    users.email AS user_email\n             FROM jobs\n             INNER JOIN providers ON providers.id = jobs.provider_id\n             INNER JOIN users ON users.id = jobs.user_id\n             $where\n             ORDER BY $statusOrder ASC, jobs.priority ASC, jobs.position ASC, jobs.created_at ASC, jobs.id ASC\n             LIMIT :limit OFFSET :offset";
+    $sql = "SELECT jobs.*,\n                    providers.key AS provider_key,\n                    providers.name AS provider_name,\n                    users.name AS user_name,\n                    users.email AS user_email\n             FROM jobs\n             INNER JOIN providers ON providers.id = jobs.provider_id\n             INNER JOIN users ON users.id = jobs.user_id\n             $where\n             ORDER BY $statusOrder ASC, $priorityOrder ASC, $positionOrder ASC, jobs.created_at DESC, jobs.id DESC\n             LIMIT :limit OFFSET :offset";
 
         // Use explicit binding for limit/offset (PDO prepared statement requires int cast)
         $params['limit'] = $limit;

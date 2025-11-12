@@ -15,6 +15,7 @@ import {
 } from './utils.js';
 
 let dragSourceId = null;
+const QUEUE_STATUSES = new Set(['downloading', 'starting', 'queued', 'paused']);
 
 export function applyProviderAlerts(alerts) {
 	state.providerAlerts = Array.isArray(alerts) ? alerts.filter(Boolean) : [];
@@ -679,23 +680,28 @@ function compareJobs(a, b) {
 		return weightDiff;
 	}
 
-	const priorityDiff = Number(a?.priority ?? 0) - Number(b?.priority ?? 0);
-	if (priorityDiff !== 0) {
-		return priorityDiff;
-	}
+	const aInQueue = QUEUE_STATUSES.has((a?.status ?? '').toLowerCase());
+	const bInQueue = QUEUE_STATUSES.has((b?.status ?? '').toLowerCase());
 
-	const positionDiff = Number(a?.position ?? 0) - Number(b?.position ?? 0);
-	if (positionDiff !== 0) {
-		return positionDiff;
+	if (aInQueue && bInQueue) {
+		const priorityDiff = Number(a?.priority ?? 0) - Number(b?.priority ?? 0);
+		if (priorityDiff !== 0) {
+			return priorityDiff;
+		}
+
+		const positionDiff = Number(a?.position ?? 0) - Number(b?.position ?? 0);
+		if (positionDiff !== 0) {
+			return positionDiff;
+		}
 	}
 
 	const createdA = parseIsoDate(a?.created_at ?? 0)?.getTime();
 	const createdB = parseIsoDate(b?.created_at ?? 0)?.getTime();
 	if (Number.isFinite(createdA) && Number.isFinite(createdB) && createdA !== createdB) {
-		return createdA - createdB; // older first for stability
+		return createdB - createdA; // newest first
 	}
 
-	return Number(a?.id ?? 0) - Number(b?.id ?? 0);
+	return Number(b?.id ?? 0) - Number(a?.id ?? 0);
 }
 
 function statusWeight(status) {
@@ -704,9 +710,9 @@ function statusWeight(status) {
 			return 0;
 		case 'starting':
 			return 1;
-		case 'paused':
-			return 2;
 		case 'queued':
+			return 2;
+		case 'paused':
 			return 3;
 		case 'completed':
 			return 4;
