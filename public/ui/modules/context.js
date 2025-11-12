@@ -27,6 +27,8 @@ export const state = {
 	settingsSaving: false,
 	settingsError: null,
 	jobStreamConnectedAt: null, // timestamp (ms) when current SSE connection opened
+	jobStreamVisibleIds: new Set(),
+	jobStreamVisibleKey: '',
 	defaultSearchLimit: 50,
 	currentView: 'search',
 	// Paging metadata for jobs list (server-side infinite scroll)

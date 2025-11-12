@@ -761,8 +761,7 @@ function enterDashboard() {
 function refreshAllData() {
 	const tasks = [
 		loadProviders(),
-		loadJobs(),
-	    loadStats(),
+		loadStats(),
 		loadStorage(),
 	];
 
@@ -773,16 +772,16 @@ function refreshAllData() {
 
 	Promise.all(tasks).finally(() => {
 		startStorageAutoRefresh();
-		startJobStream();
 		if (state.isAdmin) {
 			loadProviderStatuses();
 		}
-        loadStats();
+		loadStats();
 	});
 }
 
 function resetState() {
 	stopStorageAutoRefresh();
+	stopJobStream();
 	state.user = null;
 	state.providers = [];
 	state.users = [];
@@ -803,6 +802,9 @@ function resetState() {
 	state.settingsLoading = false;
 	state.settingsSaving = false;
 	state.settingsError = null;
+	state.jobStreamConnectedAt = null;
+	state.jobStreamVisibleIds = new Set();
+	state.jobStreamVisibleKey = '';
 	state.defaultSearchLimit = 50;
 	state.kraska.currentPath = '/';
 	state.kraska.title = null;
@@ -991,6 +993,12 @@ function switchView(view) {
 
 	if (view === 'kraska') {
 		ensureKraskaLoaded();
+	}
+
+	if (view === 'queue') {
+		loadJobs();
+	} else {
+		stopJobStream();
 	}
 }
 
@@ -1607,7 +1615,9 @@ async function queueSelectedKraska() {
 		showToast(`Queued ${payloadItems.length} item${payloadItems.length === 1 ? '' : 's'}.`, 'success');
 		state.kraska.selected.clear();
 		updateKraskaSelectAllCheckbox();
-		loadJobs();
+		if (state.currentView === 'queue') {
+			loadJobs();
+		}
 	} catch (error) {
 		showToast(messageFromError(error), 'error');
 	} finally {
@@ -2375,7 +2385,9 @@ async function queueKraskaVariant(index, button) {
 		state.kraska.selectedItem = null;
 		state.kraska.variants = [];
 		state.kraska.variantQueueing = false;
-		loadJobs();
+		if (state.currentView === 'queue') {
+			loadJobs();
+		}
 	} catch (error) {
 		showToast(messageFromError(error), 'error');
 		state.kraska.variantQueueing = false;
@@ -3097,7 +3109,9 @@ async function queueSelectedResults() {
 		showToast(`Queued ${itemsPayload.length} item${itemsPayload.length === 1 ? '' : 's'}.`, 'success');
 		state.selectedSearch.clear();
 		renderSearchResults();
-		loadJobs();
+		if (state.currentView === 'queue') {
+			loadJobs();
+		}
 	} catch (error) {
 		showToast(messageFromError(error), 'error');
 	} finally {

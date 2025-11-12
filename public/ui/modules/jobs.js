@@ -188,8 +188,14 @@ export async function loadJobs() {
 	state.jobsOffset = 0;
 	state.jobsTotal = null;
 	state.jobsHasMore = true;
+	state.jobsLoadingPage = false;
+	state.jobStreamVisibleIds = new Set();
+	state.jobStreamVisibleKey = '';
 	renderJobs();
 	await loadJobsPage(true);
+	if (state.currentView === 'queue') {
+		startJobStream();
+	}
 }
 
 async function loadJobsPage(initial = false) {
@@ -238,6 +244,7 @@ export function renderJobs() {
 		toggleElement(els.jobsEmpty, true);
 		els.jobsList.innerHTML = '';
 		els.jobsSummary.textContent = 'No jobs yet.';
+		updateVisibleJobTracking([]);
 		return;
 	}
 
@@ -248,12 +255,26 @@ export function renderJobs() {
 	els.jobsSummary.textContent = `${loaded}/${total} job${total === 1 ? '' : 's'} loaded${more}`;
 
 	els.jobsList.innerHTML = state.jobs.map((job) => renderJobItem(job)).join('');
+	updateVisibleJobTracking(state.jobs);
 
 	els.jobsList.querySelectorAll('[draggable="true"]').forEach((element) => {
 		element.addEventListener('dragstart', onDragStart);
 		element.addEventListener('dragover', onDragOver);
 		element.addEventListener('drop', onDrop);
 	});
+}
+
+function updateVisibleJobTracking(jobs) {
+	const collection = Array.isArray(jobs) ? jobs : [];
+	const ids = collection
+		.map((job) => Number(job?.id))
+		.filter((id) => Number.isFinite(id));
+	const key = ids.join(',');
+	if (key === state.jobStreamVisibleKey) {
+		return;
+	}
+	state.jobStreamVisibleIds = new Set(ids);
+	state.jobStreamVisibleKey = key;
 }
 
 function getJobDisplayState(job) {
@@ -590,25 +611,24 @@ function reorderJobsLocal(sourceId, targetId) {
 }
 
 export function startJobStream() {
+	if (state.currentView !== 'queue') return;
 	if (state.jobStream || !state.user) return;
 	try {
-		// Provide last known updated_at/id for incremental streaming if we have jobs already
+		// Restrict stream to visible slice: feed backend the newest job currently rendered
 		let streamUrl = API.jobStream;
-		if (state.jobs.length > 0) {
-			// Determine newest job based on updated_at then id
-			const sorted = [...state.jobs].sort((a, b) => {
+		const slice = state.jobs.slice(0, state.jobsOffset || state.jobs.length);
+		if (slice.length > 0) {
+			const sorted = [...slice].sort((a, b) => {
 				const ta = parseIsoDate(a.updated_at)?.getTime() ?? 0;
 				const tb = parseIsoDate(b.updated_at)?.getTime() ?? 0;
 				if (ta !== tb) return tb - ta; // newest first
 				return Number(b.id) - Number(a.id);
 			});
-			if (sorted.length > 0) {
-				const newest = sorted[0];
-				const since = encodeURIComponent(newest.updated_at || '');
-				const afterId = newest.id;
-				if (since) {
-					streamUrl = `${API.jobStream}?since=${since}&after_id=${afterId}`;
-				}
+			const newest = sorted[0];
+			const since = encodeURIComponent(newest.updated_at || '');
+			const afterId = newest.id;
+			if (since) {
+				streamUrl = `${API.jobStream}?since=${since}&after_id=${afterId}`;
 			}
 		}
 		const stream = new EventSource(streamUrl);
@@ -655,12 +675,18 @@ export function startJobStream() {
 export function stopJobStream() {
 	state.jobStream?.close();
 	state.jobStream = null;
+	state.jobStreamConnectedAt = null;
 }
 
 function handleJobEvent(event) {
 	if (!event || !event.type) return;
 
 	const job = event.job ?? {};
+	const jobId = Number(job?.id);
+	const isVisible = Number.isFinite(jobId) && state.jobStreamVisibleIds.has(jobId);
+	if (!isVisible) {
+		return;
+	}
 	// Capture previous job status (if any) before merge for change detection
 	let previousStatus = null;
 	if (job.id != null) {
