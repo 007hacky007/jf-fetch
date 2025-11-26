@@ -114,12 +114,18 @@
 
             <section id="kraska-view" data-panel="kraska" class="panel hidden">
               <div class="rounded-2xl border border-slate-800/70 bg-slate-900/60 p-6 shadow">
-                <div class="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  <div>
-                    <h3 class="text-lg font-semibold text-slate-100">Browse Stream-Cinema</h3>
-                    <p class="text-sm text-slate-400">Navigate Kra.sk menus and queue playable items.</p>
+                <div class="mb-5 space-y-4">
+                  <div class="space-y-2">
+                    <div>
+                      <h3 class="text-lg font-semibold text-slate-100">Browse Stream-Cinema</h3>
+                      <p class="text-sm text-slate-400">Switch between the classic Kra.sk tree and the Stremio catalogs mirrored from sc_stremio.py.</p>
+                    </div>
+                    <div id="kraska-provider-toggle" class="inline-flex rounded-xl border border-slate-800/60 bg-slate-950/60 p-1 text-xs font-semibold text-slate-300">
+                      <button type="button" data-kraska-provider="kraska" class="flex-1 rounded-lg px-3 py-1.5 text-slate-100">Kra.sk Library</button>
+                      <button type="button" data-kraska-provider="krask2" class="flex-1 rounded-lg px-3 py-1.5 text-slate-300/70">Stremio Catalogs</button>
+                    </div>
                   </div>
-                  <div class="flex flex-wrap items-center gap-2">
+                  <div id="kraska-menu-controls" class="flex flex-wrap items-center gap-2">
                     <button id="kraska-home-btn" type="button" class="rounded-lg border border-slate-700/60 bg-slate-950/60 px-3 py-1.5 text-xs font-semibold text-slate-200 transition hover:border-brand-400/60 hover:text-brand-200">Home</button>
                     <button id="kraska-back-btn" type="button" class="rounded-lg border border-slate-700/60 bg-slate-950/60 px-3 py-1.5 text-xs font-semibold text-slate-200 transition hover:border-brand-400/60 hover:text-brand-200 disabled:opacity-40" disabled>Back</button>
                     <button id="kraska-queue-btn" type="button" class="hidden rounded-lg bg-emerald-500 px-4 py-2 text-xs font-semibold text-white shadow transition hover:bg-emerald-400 focus:outline-none focus:ring focus:ring-emerald-500/40">Add selected to queue</button>
@@ -130,12 +136,47 @@
                     </label>
                   </div>
                 </div>
-                <div id="kraska-cache-meta" class="hidden rounded-full border border-slate-800/60 bg-slate-900/60 px-3 py-1 text-xs text-slate-300"></div>
-                <div id="kraska-breadcrumbs" class="mb-3 flex flex-wrap items-center gap-2 text-sm text-slate-400"></div>
-                <div id="kraska-error" class="hidden mb-3 rounded-lg border border-rose-500/40 bg-rose-500/10 p-3 text-sm text-rose-200"></div>
-                <div id="kraska-loading" class="hidden text-sm text-brand-300">Loading menu…</div>
-                <div id="kraska-empty" class="hidden text-sm text-slate-500">No items available here.</div>
-                <ul id="kraska-list" class="flex flex-col gap-3"></ul>
+
+                <div id="kraska-menu-view" class="space-y-3">
+                  <div id="kraska-cache-meta" class="hidden rounded-full border border-slate-800/60 bg-slate-900/60 px-3 py-1 text-xs text-slate-300"></div>
+                  <div id="kraska-breadcrumbs" class="mb-3 flex flex-wrap items-center gap-2 text-sm text-slate-400"></div>
+                  <div id="kraska-error" class="hidden mb-3 rounded-lg border border-rose-500/40 bg-rose-500/10 p-3 text-sm text-rose-200"></div>
+                  <div id="kraska-loading" class="hidden text-sm text-brand-300">Loading menu…</div>
+                  <div id="kraska-empty" class="hidden text-sm text-slate-500">No items available here.</div>
+                  <ul id="kraska-list" class="flex flex-col gap-3"></ul>
+                </div>
+
+                <div id="krask2-view" class="hidden space-y-4">
+                  <div class="flex flex-col gap-3 lg:flex-row lg:items-end">
+                    <label class="flex-1 text-sm">
+                      <span class="font-medium text-slate-200">Catalog</span>
+                      <select id="krask2-catalog-select" class="mt-1 w-full rounded-lg border border-slate-800 bg-slate-950/70 px-3 py-2 text-base text-slate-100 focus:border-brand-400 focus:outline-none focus:ring focus:ring-brand-500/40"></select>
+                    </label>
+                    <label class="flex-1 text-sm">
+                      <span class="font-medium text-slate-200">Search term (optional)</span>
+                      <input id="krask2-search-input" type="text" placeholder="e.g. The Wire" class="mt-1 w-full rounded-lg border border-slate-800 bg-slate-950/70 px-3 py-2 text-base text-slate-100 placeholder-slate-500 focus:border-brand-400 focus:outline-none focus:ring focus:ring-brand-500/40" />
+                    </label>
+                    <div class="flex flex-wrap items-center gap-2">
+                      <button id="krask2-load-btn" type="button" class="rounded-lg bg-brand-500 px-4 py-2 text-xs font-semibold text-white shadow transition hover:bg-brand-400 focus:outline-none focus:ring focus:ring-brand-500/40">Load items</button>
+                      <button id="krask2-refresh-btn" type="button" class="rounded-lg border border-slate-700/60 bg-slate-950/60 px-3 py-1.5 text-xs font-semibold text-slate-200 transition hover:border-brand-400/60 hover:text-brand-200">Refresh catalogs</button>
+                    </div>
+                  </div>
+                  <div class="space-y-2 text-xs">
+                    <div id="krask2-catalog-cache-meta" class="hidden rounded-full border border-slate-800/60 bg-slate-900/60 px-3 py-1 text-slate-300"></div>
+                    <div class="flex flex-wrap items-center gap-2">
+                      <div id="krask2-items-cache-meta" class="hidden rounded-full border border-slate-800/60 bg-slate-900/60 px-3 py-1 text-slate-300"></div>
+                      <button id="krask2-items-refresh-btn" type="button" class="rounded-lg border border-slate-700/60 bg-slate-950/60 px-3 py-1.5 text-xs font-semibold text-slate-200 transition hover:border-brand-400/60 hover:text-brand-200">Refresh results</button>
+                    </div>
+                  </div>
+                  <div class="flex flex-wrap items-center gap-3 text-xs">
+                    <button id="krask2-queue-btn" type="button" class="hidden rounded-lg bg-emerald-500 px-4 py-2 text-xs font-semibold text-white shadow transition hover:bg-emerald-400 focus:outline-none focus:ring focus:ring-emerald-500/40">Add selected to queue</button>
+                    <p class="text-slate-400">Use the toggles on movies, series, and episodes to build a bulk selection.</p>
+                  </div>
+                  <div id="krask2-error" class="hidden rounded-lg border border-rose-500/40 bg-rose-500/10 p-3 text-sm text-rose-200"></div>
+                  <div id="krask2-loading" class="hidden text-sm text-brand-300">Loading catalog…</div>
+                  <div id="krask2-empty" class="hidden text-sm text-slate-500">No items returned for this catalog.</div>
+                  <ul id="krask2-list" class="flex flex-col gap-3"></ul>
+                </div>
               </div>
             </section>
 

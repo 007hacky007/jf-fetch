@@ -214,6 +214,8 @@ final class Jellyfin
             $titleRaw = pathinfo($sourcePath, PATHINFO_FILENAME) ?: basename($sourcePath);
         }
 
+        $titleRaw = self::stripHighlightedSuffix($titleRaw);
+
         $extension = ltrim((string) pathinfo($sourcePath, PATHINFO_EXTENSION), '.');
         $normalizedCategory = strtolower($categoryRaw);
 
@@ -259,6 +261,7 @@ final class Jellyfin
      */
     private static function buildMoviePlacement(string $title, string $extension): array
     {
+        $title = self::stripHighlightedSuffix($title);
         $year = self::extractYear($title);
         $baseTitle = trim($title);
 
@@ -378,7 +381,8 @@ final class Jellyfin
             $details['episode_title'] = $hints['episode_title'];
         }
 
-        $showSegment = self::sanitizeSegment($details['series'] ?? '', 'Unknown Series');
+        $seriesName = self::stripHighlightedSuffix((string) ($details['series'] ?? ''));
+        $showSegment = self::sanitizeSegment($seriesName, 'Unknown Series');
         $seasonSegment = self::sanitizeSegment(sprintf('Season %02d', $season), sprintf('Season %02d', $season));
 
         $episodeCode = sprintf('S%02dE%02d', $season, $episode);
@@ -458,7 +462,7 @@ final class Jellyfin
             $episodeTitle = $hints['episode_title'];
         }
 
-        $showSegment = self::sanitizeSegment($showName, 'Unknown Series');
+        $showSegment = self::sanitizeSegment(self::stripHighlightedSuffix($showName), 'Unknown Series');
         $seasonSegment = self::sanitizeSegment(sprintf('Season %02d', $season), sprintf('Season %02d', $season));
 
         $episodeCode = sprintf('S%02dE%02d', $season, $episode);
@@ -710,7 +714,31 @@ final class Jellyfin
         }
 
         $trimmed = trim($value);
-        return $trimmed === '' ? null : $trimmed;
+        if ($trimmed === '') {
+            return null;
+        }
+
+        $cleaned = self::stripHighlightedSuffix($trimmed);
+
+        return $cleaned === '' ? null : $cleaned;
+    }
+
+    private static function stripHighlightedSuffix(string $label): string
+    {
+        $trimmed = trim($label);
+        if ($trimmed === '') {
+            return '';
+        }
+
+        $needle = ' - [b';
+        $position = stripos($trimmed, $needle);
+        if ($position === false) {
+            return $trimmed;
+        }
+
+        $base = substr($trimmed, 0, $position);
+
+        return rtrim($base);
     }
 
     private static function looksLikeSeasonLabel(string $label): bool
@@ -763,6 +791,7 @@ final class Jellyfin
 
     private static function normalizeTrailLabel(string $label): string
     {
+        $label = self::stripHighlightedSuffix($label);
         $ascii = strtolower(self::transliterate($label));
         $ascii = preg_replace('/[^a-z0-9]+/', ' ', $ascii ?? '') ?? '';
 

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Providers;
 
+use App\Infra\ProviderRateLimiter;
 use RuntimeException;
 use JsonException;
 
@@ -26,6 +27,10 @@ class KraSkProvider implements VideoProvider, StatusCapableProvider
 {
     private const API_BASE = 'https://api.kra.sk';
     private const SC_BASE = 'https://stream-cinema.online/kodi';
+    private const DEFAULT_SC_RATE_LIMIT_SPACING = 2;
+    private const DEFAULT_SC_RATE_LIMIT_BURST_LIMIT = 12;
+    private const DEFAULT_SC_RATE_LIMIT_BURST_WINDOW = 30;
+    private const RATE_LIMIT_PROVIDER_KEY = 'kraska';
 
     /** @var array<string,mixed> */
     private array $config;
@@ -47,6 +52,11 @@ class KraSkProvider implements VideoProvider, StatusCapableProvider
     /** @var array<int,string> */
     private array $scFetchQueue = []; // queued Stream-Cinema detail paths waiting for rate limit<br/>
     private ?int $lastIdentFetchTs = null; // timestamp of last successful fetchStreamCinemaItem real request
+    private int $streamCinemaMinSpacingSeconds = self::DEFAULT_SC_RATE_LIMIT_SPACING;
+    private ?int $streamCinemaBurstLimit = self::DEFAULT_SC_RATE_LIMIT_BURST_LIMIT;
+    private ?int $streamCinemaBurstWindowSeconds = self::DEFAULT_SC_RATE_LIMIT_BURST_WINDOW;
+    /** @var array<string,int> */
+    private array $streamCinemaRateLimitOptions = [];
 
     /**
      * @param array<string,mixed> $config Expected keys: username, password
@@ -60,6 +70,31 @@ class KraSkProvider implements VideoProvider, StatusCapableProvider
         // to a client identifier remain stable across restarts.
         if (isset($config['uuid']) && is_string($config['uuid']) && $config['uuid'] !== '') {
             $this->scUuid = $config['uuid'];
+        }
+
+        $spacing = isset($config['rate_limit_min_spacing_seconds'])
+            ? (int) $config['rate_limit_min_spacing_seconds']
+            : self::DEFAULT_SC_RATE_LIMIT_SPACING;
+        $this->streamCinemaMinSpacingSeconds = max(0, min(3600, $spacing));
+
+        $burstLimit = isset($config['rate_limit_burst_limit'])
+            ? (int) $config['rate_limit_burst_limit']
+            : self::DEFAULT_SC_RATE_LIMIT_BURST_LIMIT;
+        $burstWindow = isset($config['rate_limit_burst_window_seconds'])
+            ? (int) $config['rate_limit_burst_window_seconds']
+            : self::DEFAULT_SC_RATE_LIMIT_BURST_WINDOW;
+
+        if ($burstLimit > 0 && $burstWindow > 0) {
+            $this->streamCinemaBurstLimit = min($burstLimit, 500);
+            $this->streamCinemaBurstWindowSeconds = min($burstWindow, 86400);
+            $this->streamCinemaRateLimitOptions = [
+                'burst_limit' => $this->streamCinemaBurstLimit,
+                'burst_window_seconds' => $this->streamCinemaBurstWindowSeconds,
+            ];
+        } else {
+            $this->streamCinemaBurstLimit = null;
+            $this->streamCinemaBurstWindowSeconds = null;
+            $this->streamCinemaRateLimitOptions = [];
         }
     }
 
@@ -83,7 +118,7 @@ class KraSkProvider implements VideoProvider, StatusCapableProvider
             foreach ($searchCategories as $category) {
                 $url = self::SC_BASE . '/Search/' . $category;
                 $params = $this->buildStreamCinemaParams(['search' => $query, 'id' => $category]);
-                $data = $this->httpGetJson($url . '?' . $params, 15, true);
+                $data = $this->httpGetJson($url . '?' . $params, 15, true, 'catalog');
                 $part = is_array($data['menu'] ?? null) ? $data['menu'] : [];
                 if (!empty($part)) { $aggregated = array_merge($aggregated, $part); }
                 if (count($aggregated) >= $limit) { break; }
@@ -91,7 +126,7 @@ class KraSkProvider implements VideoProvider, StatusCapableProvider
             if (count($aggregated) < $limit && strlen($query) > 2) {
                 $url = self::SC_BASE . '/Search/' . $peopleCategory;
                 $params = $this->buildStreamCinemaParams(['search' => $query, 'id' => $peopleCategory, 'ms' => '1']);
-                $data = $this->httpGetJson($url . '?' . $params, 15, true);
+                $data = $this->httpGetJson($url . '?' . $params, 15, true, 'catalog');
                 $part = is_array($data['menu'] ?? null) ? $data['menu'] : [];
                 if (!empty($part)) { $aggregated = array_merge($aggregated, $part); }
             }
@@ -327,7 +362,7 @@ class KraSkProvider implements VideoProvider, StatusCapableProvider
         $url = $baseUrl . $normalizedPath;
         $url .= str_contains($normalizedPath, '?') ? '&' . $query : '?' . $query;
 
-        $response = $this->httpGetJson($url, 20, true);
+        $response = $this->httpGetJson($url, 20, true, 'catalog');
 
         $items = [];
         $rawMenu = $response['menu'] ?? [];
@@ -631,14 +666,49 @@ class KraSkProvider implements VideoProvider, StatusCapableProvider
         }
 
         $payload = ['data' => ['username' => $username, 'password' => $password]];
-        $response = $this->apiPost('/api/user/login', $payload, requireAuth: false, attachSession: false, mutateSession: true);
-        if (!isset($response['session_id']) || !is_string($response['session_id']) || $response['session_id'] === '') {
-            throw new RuntimeException('Kra.sk login failed');
+        $attempt = 0;
+        $maxAttempts = 2;
+
+        while ($attempt < $maxAttempts) {
+            try {
+                $response = $this->apiPost('/api/user/login', $payload, requireAuth: false, attachSession: false, mutateSession: true);
+                if (!isset($response['session_id']) || !is_string($response['session_id']) || $response['session_id'] === '') {
+                    throw new RuntimeException('Kra.sk login failed');
+                }
+                $this->sessionId = $response['session_id'];
+                $this->lastLoginTs = time();
+                $this->userInfoCache = null; // reset
+                return $this->sessionId;
+            } catch (\Throwable $exception) {
+                $attempt++;
+                $this->sessionId = null;
+                $this->lastLoginTs = null;
+
+                if ($attempt >= $maxAttempts || !$this->shouldRetryLogin($exception)) {
+                    throw $exception;
+                }
+
+                if (($this->config['debug'] ?? false) === true) {
+                    $this->debugLog('[LOGIN] Retrying after transient error: ' . $exception->getMessage());
+                }
+                usleep(250000);
+            }
         }
-        $this->sessionId = $response['session_id'];
-        $this->lastLoginTs = time();
-        $this->userInfoCache = null; // reset
-        return $this->sessionId;
+
+        throw new RuntimeException('Kra.sk login failed');
+    }
+
+    private function shouldRetryLogin(\Throwable $exception): bool
+    {
+        $message = strtolower($exception->getMessage());
+        if (str_contains($message, 'invalid credentials')) {
+            return true;
+        }
+        if (str_contains($message, 'code 1100')) {
+            return true;
+        }
+
+        return false;
     }
 
     /**
@@ -1128,7 +1198,7 @@ class KraSkProvider implements VideoProvider, StatusCapableProvider
      * Simple JSON GET helper for Stream-Cinema endpoints.
      * @return array<string,mixed>
      */
-    private function httpGetJson(string $url, int $timeout, bool $withAuth = false): array
+    private function httpGetJson(string $url, int $timeout, bool $withAuth = false, string $bucket = 'generic'): array
     {
         if ($this->scHttpGet !== null) {
             /** @var callable $cb */
@@ -1139,6 +1209,7 @@ class KraSkProvider implements VideoProvider, StatusCapableProvider
             }
             throw new RuntimeException('Stream-Cinema test callback must return array');
         }
+        $this->awaitStreamCinemaRateLimit($bucket);
         $ch = curl_init($url);
         if ($ch === false) {
             throw new RuntimeException('Failed to init cURL');
@@ -1171,6 +1242,40 @@ class KraSkProvider implements VideoProvider, StatusCapableProvider
             $this->debugLog('[SC GET] ' . $url . ' => ' . substr($raw, 0, 1000));
         }
         return is_array($decoded) ? $decoded : [];
+    }
+
+    private function awaitStreamCinemaRateLimit(string $bucket): void
+    {
+        if ($this->scHttpGet !== null) {
+            return;
+        }
+
+        $bucket = strtolower(trim($bucket));
+        if ($bucket === '') {
+            $bucket = 'generic';
+        }
+
+        $enforceSpacing = $this->streamCinemaMinSpacingSeconds > 0;
+        $enforceBurst = $this->streamCinemaRateLimitOptions !== [];
+
+        if (!$enforceSpacing && !$enforceBurst) {
+            return;
+        }
+
+        while (true) {
+            $retryAfter = ProviderRateLimiter::acquire(
+                self::RATE_LIMIT_PROVIDER_KEY,
+                $bucket,
+                $this->streamCinemaMinSpacingSeconds,
+                [],
+                $this->streamCinemaRateLimitOptions
+            );
+            if ($retryAfter === null) {
+                return;
+            }
+
+            sleep(max(1, $retryAfter));
+        }
     }
 
     /**
@@ -1318,7 +1423,7 @@ class KraSkProvider implements VideoProvider, StatusCapableProvider
         // Perform real fetch
         $query = $this->buildStreamCinemaParams([]);
         $url = self::SC_BASE . $path . (str_contains($path, '?') ? '&' : '?') . $query;
-        $detail = $this->httpGetJson($url, 20, true);
+        $detail = $this->httpGetJson($url, 20, true, 'meta');
         $this->lastIdentFetchTs = $now;
         return $detail;
     }
@@ -1338,7 +1443,7 @@ class KraSkProvider implements VideoProvider, StatusCapableProvider
         
         $query = $this->buildStreamCinemaParams([]);
         $url = self::SC_BASE . $streamUrl . (str_contains($streamUrl, '?') ? '&' : '?') . $query;
-        $response = $this->httpGetJson($url, 20, true);
+        $response = $this->httpGetJson($url, 20, true, 'stream');
         
         if ($debug) {
             $this->debugLog('[SC API] Response keys: ' . implode(', ', array_keys($response)));
@@ -2291,7 +2396,7 @@ class KraSkProvider implements VideoProvider, StatusCapableProvider
             try {
                 $query = $this->buildStreamCinemaParams([]);
                 $url = self::SC_BASE . $path . (str_contains($path, '?') ? '&' : '?') . $query;
-                $detail = $this->httpGetJson($url, 20, true);
+                $detail = $this->httpGetJson($url, 20, true, 'meta');
                 $this->lastIdentFetchTs = time();
                 $processed++;
                 // For now we only fetch & drop; enrichment will occur on subsequent operations when needed.
@@ -2319,22 +2424,5 @@ class KraSkProvider implements VideoProvider, StatusCapableProvider
     public function getQueuedIdentFetchPaths(): array
     {
         return $this->scFetchQueue;
-    }
-}
-
-// Custom exception for deferred ident fetches due to rate limiting.
-class RateLimitDeferredException extends RuntimeException
-{
-    private int $retryAfterSeconds;
-
-    public function __construct(int $retryAfterSeconds, string $message = 'Stream-Cinema ident fetch deferred due to rate limit', ?\Throwable $previous = null)
-    {
-        parent::__construct($message, 0, $previous);
-        $this->retryAfterSeconds = max(1, $retryAfterSeconds);
-    }
-
-    public function getRetryAfterSeconds(): int
-    {
-        return $this->retryAfterSeconds;
     }
 }

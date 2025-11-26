@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Providers;
 
 use RuntimeException;
+use Throwable;
 
 /**
  * Normalizes provider configuration payloads before persistence.
@@ -23,6 +24,7 @@ final class ProviderConfig
         return match ($normalizedKey) {
             'webshare' => self::prepareWebshare($config),
             'kraska' => self::prepareKraSk($config),
+            'krask2' => self::prepareKraSk2($config),
             default => $config,
         };
     }
@@ -160,6 +162,124 @@ final class ProviderConfig
 
         $config['ident_rate_limit_seconds'] = $normalizedRateLimit;
         unset($config['sc_ident_rate_limit_seconds']);
+
+        $config = self::normalizeRateLimitConfig($config, 'Kra.sk Stream-Cinema rate limit');
+
+        return $config;
+    }
+
+    /**
+     * @param array<string, mixed> $config
+     */
+    private static function prepareKraSk2(array $config): array
+    {
+        $manifestUrl = isset($config['manifest_url']) ? trim((string) $config['manifest_url']) : '';
+        if ($manifestUrl === '' || preg_match('#^https?://#i', $manifestUrl) !== 1) {
+            throw new RuntimeException('KraSk2 manifest_url must be a valid HTTP(S) URL.');
+        }
+
+        $userAgent = isset($config['user_agent']) ? trim((string) $config['user_agent']) : '';
+        if ($userAgent === '') {
+            $userAgent = KraSk2Provider::DEFAULT_USER_AGENT;
+        }
+
+        $timeout = isset($config['http_timeout']) ? (int) $config['http_timeout'] : KraSk2Provider::DEFAULT_HTTP_TIMEOUT;
+        if ($timeout <= 0) {
+            $timeout = KraSk2Provider::DEFAULT_HTTP_TIMEOUT;
+        }
+
+        $episodeLimit = isset($config['search_series_episode_limit']) && $config['search_series_episode_limit'] !== ''
+            ? (int) $config['search_series_episode_limit']
+            : null;
+        if ($episodeLimit !== null && $episodeLimit <= 0) {
+            throw new RuntimeException('KraSk2 series episode limit must be a positive integer.');
+        }
+
+        $enrichLimit = isset($config['search_enrich_limit']) && $config['search_enrich_limit'] !== ''
+            ? (int) $config['search_enrich_limit']
+            : null;
+        if ($enrichLimit !== null && $enrichLimit < 0) {
+            throw new RuntimeException('KraSk2 search enrich limit must be zero or a positive integer.');
+        }
+
+        try {
+            $probeConfig = [
+                'manifest_url' => $manifestUrl,
+                'user_agent' => $userAgent,
+                'http_timeout' => $timeout,
+            ];
+            if ($episodeLimit !== null) {
+                $probeConfig['search_series_episode_limit'] = $episodeLimit;
+            }
+            if ($enrichLimit !== null) {
+                $probeConfig['search_enrich_limit'] = $enrichLimit;
+            }
+
+            $provider = new KraSk2Provider($probeConfig);
+            $status = $provider->status();
+            if (($status['ok'] ?? false) !== true) {
+                throw new RuntimeException('KraSk2 manifest probe failed: ' . ($status['error'] ?? 'unknown error'));
+            }
+        } catch (RuntimeException $exception) {
+            throw $exception;
+        } catch (Throwable $exception) {
+            throw new RuntimeException('KraSk2 manifest validation failed: ' . $exception->getMessage(), 0, $exception);
+        }
+
+        $config['manifest_url'] = $manifestUrl;
+        $config['user_agent'] = $userAgent;
+        $config['http_timeout'] = $timeout;
+        if ($episodeLimit !== null) {
+            $config['search_series_episode_limit'] = $episodeLimit;
+        } else {
+            unset($config['search_series_episode_limit']);
+        }
+
+        if ($enrichLimit !== null) {
+            $config['search_enrich_limit'] = $enrichLimit;
+        } else {
+            unset($config['search_enrich_limit']);
+        }
+
+        $config = self::normalizeRateLimitConfig($config, 'KraSk2 rate limit');
+
+        return $config;
+    }
+
+    /**
+     * @param array<string,mixed> $config
+     * @return array<string,mixed>
+     */
+    private static function normalizeRateLimitConfig(array $config, string $labelPrefix): array
+    {
+        $fields = [
+            'rate_limit_min_spacing_seconds' => 'minimum spacing seconds',
+            'rate_limit_burst_limit' => 'burst limit',
+            'rate_limit_burst_window_seconds' => 'burst window seconds',
+        ];
+
+        foreach ($fields as $key => $label) {
+            if (!array_key_exists($key, $config)) {
+                continue;
+            }
+
+            $value = $config[$key];
+            if ($value === '' || $value === null) {
+                unset($config[$key]);
+                continue;
+            }
+
+            if (!is_numeric((string) $value)) {
+                throw new RuntimeException(sprintf('%s %s must be numeric.', $labelPrefix, $label));
+            }
+
+            $intValue = (int) $value;
+            if ($intValue < 0) {
+                throw new RuntimeException(sprintf('%s %s cannot be negative.', $labelPrefix, $label));
+            }
+
+            $config[$key] = $intValue;
+        }
 
         return $config;
     }

@@ -12,6 +12,7 @@ use App\Providers\VideoProvider;
 use App\Providers\StatusCapableProvider;
 use App\Providers\WebshareProvider;
 use App\Providers\KraSkProvider;
+use App\Providers\KraSk2Provider;
 
 // Unified provider status endpoint with 24h caching.
 // Response shape: { data: [ { provider: string, ... } ], fetched_at: ISO8601, cached: bool }
@@ -139,6 +140,7 @@ function buildProvider(array $providerRow): VideoProvider
     return match ($key) {
         'webshare' => new WebshareProvider($config),
         'kraska' => new KraSkProvider($config),
+        'krask2' => new KraSk2Provider($config),
         default => throw new RuntimeException('Unsupported provider: ' . $key),
     };
 }

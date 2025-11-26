@@ -40,6 +40,7 @@ RUN sed -i 's@^user .*;@user app;@' /etc/nginx/nginx.conf \
 
 # Prepare writable directories and adjust ownership for the runtime user.
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY docker/php-error.ini /usr/local/etc/php/conf.d/php-error.ini
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
 RUN mkdir -p /downloads /library /var/www/storage/logs \

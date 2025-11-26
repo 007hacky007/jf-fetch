@@ -62,4 +62,34 @@ final class ProviderConfigKraUuidTest extends TestCase
         $out = ProviderConfig::prepare('kraska', $config);
         $this->assertSame(120, $out['ident_rate_limit_seconds'] ?? null);
     }
+
+    public function testNormalizesStreamCinemaRateLimitFields(): void
+    {
+        $config = [
+            'username' => 'user1',
+            'password' => 'pass1',
+            'rate_limit_min_spacing_seconds' => '5',
+            'rate_limit_burst_limit' => '9',
+            'rate_limit_burst_window_seconds' => '30',
+        ];
+
+        $out = ProviderConfig::prepare('kraska', $config);
+        $this->assertSame(5, $out['rate_limit_min_spacing_seconds'] ?? null);
+        $this->assertSame(9, $out['rate_limit_burst_limit'] ?? null);
+        $this->assertSame(30, $out['rate_limit_burst_window_seconds'] ?? null);
+    }
+
+    public function testRejectsNegativeStreamCinemaRateLimits(): void
+    {
+        $config = [
+            'username' => 'user1',
+            'password' => 'pass1',
+            'rate_limit_burst_limit' => -1,
+        ];
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('Kra.sk Stream-Cinema rate limit burst limit cannot be negative.');
+
+        ProviderConfig::prepare('kraska', $config);
+    }
 }

@@ -358,6 +358,94 @@ function wireKraska() {
 		target.indeterminate = false;
 		setKraskaSelectAll(Boolean(target.checked));
 	});
+
+	els.kraskaProviderToggle?.addEventListener('click', (event) => {
+		const target = event.target;
+		if (!(target instanceof HTMLElement)) return;
+		const button = target.closest('[data-kraska-provider]');
+		if (!(button instanceof HTMLElement)) return;
+		setKraskaMode(button.dataset.kraskaProvider ?? 'kraska');
+	});
+
+	els.krask2RefreshBtn?.addEventListener('click', () => {
+		loadKrask2Catalogs({ force: true });
+	});
+
+	els.krask2LoadBtn?.addEventListener('click', () => {
+		loadKrask2Items();
+	});
+
+	els.krask2ItemsRefreshBtn?.addEventListener('click', () => {
+		loadKrask2Items({ force: true });
+	});
+
+	els.krask2QueueBtn?.addEventListener('click', () => {
+		void queueSelectedKrask2();
+	});
+
+	els.krask2CatalogSelect?.addEventListener('change', (event) => {
+		const target = event.target;
+		if (!(target instanceof HTMLSelectElement)) return;
+		setKrask2SelectedCatalog(target.value);
+	});
+
+	els.krask2SearchInput?.addEventListener('keydown', (event) => {
+		if (event.key !== 'Enter') return;
+		event.preventDefault();
+		loadKrask2Items();
+	});
+
+	els.krask2List?.addEventListener('click', (event) => {
+		const target = event.target;
+		if (!(target instanceof HTMLElement)) return;
+		const optionsBtn = target.closest('[data-krask2-options]');
+		if (optionsBtn instanceof HTMLElement) {
+			const index = Number.parseInt(optionsBtn.dataset.krask2Options ?? '', 10);
+			if (Number.isFinite(index)) {
+				event.preventDefault();
+				openKrask2Options(index);
+			}
+			return;
+		}
+		const toggleBtn = target.closest('[data-krask2-episodes-toggle]');
+		if (toggleBtn instanceof HTMLElement) {
+			const index = Number.parseInt(toggleBtn.dataset.krask2EpisodesToggle ?? '', 10);
+			if (Number.isFinite(index)) {
+				event.preventDefault();
+				toggleKrask2Episodes(index);
+			}
+			return;
+		}
+		const refreshBtn = target.closest('[data-krask2-episodes-refresh]');
+		if (refreshBtn instanceof HTMLElement) {
+			const index = Number.parseInt(refreshBtn.dataset.krask2EpisodesRefresh ?? '', 10);
+			if (Number.isFinite(index)) {
+				event.preventDefault();
+				const item = state.krask2.items[index];
+				if (item) {
+					loadKrask2Episodes(item, index, { force: true });
+				}
+			}
+			return;
+		}
+		const episodeBtn = target.closest('[data-krask2-episode-options]');
+		if (episodeBtn instanceof HTMLElement) {
+			const payload = episodeBtn.dataset.krask2EpisodeOptions ?? '';
+			const [itemIndexRaw, episodeIndexRaw] = payload.split(':');
+			const itemIndex = Number.parseInt(itemIndexRaw ?? '', 10);
+			const episodeIndex = Number.parseInt(episodeIndexRaw ?? '', 10);
+			if (Number.isFinite(itemIndex) && Number.isFinite(episodeIndex)) {
+				event.preventDefault();
+				openKrask2EpisodeOptions(itemIndex, episodeIndex);
+			}
+		}
+	});
+
+	els.krask2List?.addEventListener('change', (event) => {
+		handleKrask2SelectionChange(event);
+	});
+
+	updateKraskaProviderToggle();
 }
 
 function wireAdmin() {
@@ -819,6 +907,24 @@ function resetState() {
 	state.kraska.variantsLoading = false;
 	state.kraska.variantsError = null;
 	state.kraska.variantQueueing = false;
+	state.kraska.variantsCache = null;
+	state.kraska.mode = 'kraska';
+	state.krask2.manifest = null;
+	state.krask2.catalogs = [];
+	state.krask2.catalogsLoading = false;
+	state.krask2.catalogsError = null;
+	state.krask2.catalogCache = null;
+	state.krask2.selectedCatalogKey = null;
+	state.krask2.items = [];
+	state.krask2.itemsLoading = false;
+	state.krask2.itemsError = null;
+	state.krask2.itemsRequested = false;
+	state.krask2.searchTerm = '';
+	state.krask2.lastLoadedSearch = '';
+	state.krask2.meta = {};
+	state.krask2.selected = new Map();
+	state.krask2.queueLabel = '';
+	state.krask2.itemsCache = null;
 	applyDefaultSearchLimit(true);
 	applyProviderAlerts([]);
 	renderProviders();
@@ -1116,6 +1222,14 @@ function toggleLogsAutoRefresh() {
 
 function ensureKraskaLoaded() {
 	if (!state.user) return;
+	if (state.kraska.mode === 'krask2') {
+		ensureKrask2Initialized();
+		return;
+	}
+	ensureKraskaMenuReady();
+}
+
+function ensureKraskaMenuReady() {
 	if (!state.kraska.items || state.kraska.items.length === 0) {
 		if (!state.kraska.loading) {
 			loadKraskaMenu('/', { resetTrail: true });
@@ -1150,7 +1264,7 @@ async function loadKraskaMenu(path = '/', options = {}) {
 		}
 		const response = await fetchJson(`${API.kraskaMenu}?${params.toString()}`);
 		const payload = response?.data ?? {};
-		const cacheMeta = normalizeKraskaCacheMeta(response?.cache ?? null);
+		const cacheMeta = normalizeCacheMeta(response?.cache ?? null);
 		const items = Array.isArray(payload?.items) ? payload.items : [];
 		state.kraska.currentPath = payload?.path ?? normalizedPath;
 		state.kraska.title = payload?.title ?? null;
@@ -1314,13 +1428,13 @@ function renderKraskaActionButtons(item, index) {
 	return buttons;
 }
 
-function formatKraskaCacheAge(meta) {
+function formatCacheAge(meta) {
 	if (!meta) return '';
+	if (typeof meta.age_seconds === 'number' && Number.isFinite(meta.age_seconds)) {
+		return formatCacheAgeFromSeconds(meta.age_seconds);
+	}
 	if (meta.fetched_at) {
 		return formatRelativeTime(meta.fetched_at);
-	}
-	if (meta.age_seconds !== null && meta.age_seconds !== undefined) {
-		return formatCacheAgeFromSeconds(meta.age_seconds);
 	}
 	return '';
 }
@@ -1343,6 +1457,38 @@ function formatCacheAgeFromSeconds(seconds) {
 	}
 	const days = Math.round(value / 86400);
 	return `${days} d${days === 1 ? '' : 's'} ago`;
+}
+
+function buildCacheMetaText(meta, cachedLabel = 'Cached result', freshLabel = 'Fresh result') {
+	if (!meta) {
+		return '';
+	}
+	const label = meta.hit ? cachedLabel : freshLabel;
+	const ageLabel = formatCacheAge(meta);
+	return ageLabel ? `${label} • ${ageLabel}` : label;
+}
+
+function updateCacheMetaElement(element, meta, options = {}) {
+	if (!element) return;
+	const display = options.display ?? 'inline-flex';
+	if (!meta) {
+		element.textContent = '';
+		delete element.dataset.variant;
+		toggleElement(element, false);
+		return;
+	}
+	const cachedLabel = options.cachedLabel ?? 'Cached result';
+	const freshLabel = options.freshLabel ?? 'Fresh result';
+	const text = buildCacheMetaText(meta, cachedLabel, freshLabel);
+	if (text === '') {
+		element.textContent = '';
+		delete element.dataset.variant;
+		toggleElement(element, false);
+		return;
+	}
+	element.textContent = text;
+	element.dataset.variant = meta.hit ? 'cached' : 'fresh';
+	toggleElement(element, true, display);
 }
 
 function renderKraskaMetaChips(item) {
@@ -1391,7 +1537,7 @@ function renderKraskaBreadcrumbs() {
 	els.kraskaBreadcrumbs.innerHTML = fragments.join('<span class="text-slate-600">/</span>');
 }
 
-function normalizeKraskaCacheMeta(meta) {
+function normalizeCacheMeta(meta) {
 	if (!meta || typeof meta !== 'object') {
 		return null;
 	}
@@ -1404,28 +1550,42 @@ function normalizeKraskaCacheMeta(meta) {
 		hit: Boolean(meta.hit),
 		fetched_at: fetchedAtRaw !== '' ? fetchedAtRaw : null,
 		age_seconds: Number.isFinite(ageRaw) && ageRaw >= 0 ? ageRaw : null,
-		ttl_seconds: Number.isFinite(ttlRaw) && ttlRaw > 0 ? ttlRaw : null,
-		refreshable: meta.refreshable !== undefined ? Boolean(meta.refreshable) : null,
+		ttl_seconds: Number.isFinite(ttlRaw) && ttlRaw >= 0 ? ttlRaw : null,
+		refreshable: meta.refreshable !== undefined ? Boolean(meta.refreshable) : true,
 	};
 }
 
 function renderKraskaCacheMeta() {
-	if (!els.kraskaCacheMeta) return;
-	const meta = state.kraska.cache;
-	if (!meta) {
-		els.kraskaCacheMeta.textContent = '';
-		delete els.kraskaCacheMeta.dataset.variant;
-		toggleElement(els.kraskaCacheMeta, false);
+	updateCacheMetaElement(els.kraskaCacheMeta, state.kraska.cache, {
+		cachedLabel: 'Cached result',
+		freshLabel: 'Fresh result',
+	});
+}
+
+function renderKrask2CatalogCacheMeta() {
+	if (state.krask2.catalogsLoading || !Array.isArray(state.krask2.catalogs) || state.krask2.catalogs.length === 0) {
+		updateCacheMetaElement(els.krask2CatalogCacheMeta, null);
 		return;
 	}
+	const meta = state.krask2.catalogCache ?? { hit: false, fetched_at: null, age_seconds: null };
+	updateCacheMetaElement(els.krask2CatalogCacheMeta, meta, {
+		cachedLabel: 'Manifest cached',
+		freshLabel: 'Manifest fetched live',
+		display: 'block',
+	});
+}
 
-	const variant = meta.hit ? 'cached' : 'fresh';
-	const label = meta.hit ? 'Cached result' : 'Fresh result';
-	const ageLabel = formatKraskaCacheAge(meta);
-	const text = ageLabel ? `${label} • ${ageLabel}` : label;
-	els.kraskaCacheMeta.textContent = text;
-	els.kraskaCacheMeta.dataset.variant = variant;
-	toggleElement(els.kraskaCacheMeta, true, 'inline-flex');
+function renderKrask2ItemsCacheMeta() {
+	if (!state.krask2.itemsRequested || state.krask2.itemsLoading) {
+		updateCacheMetaElement(els.krask2ItemsCacheMeta, null);
+		return;
+	}
+	const meta = state.krask2.itemsCache ?? { hit: false, fetched_at: null, age_seconds: null };
+	updateCacheMetaElement(els.krask2ItemsCacheMeta, meta, {
+		cachedLabel: 'Catalog cached',
+		freshLabel: 'Catalog fetched live',
+		display: 'block',
+	});
 }
 
 function updateKraskaRefreshButton() {
@@ -2057,6 +2217,153 @@ function isNonEmptyObject(value) {
 	return Object.keys(value).length > 0;
 }
 
+function buildKrask2JobMetadata(context, variant) {
+	if (!context || (String(context.provider ?? '')).toLowerCase() !== 'krask2') {
+		return null;
+	}
+	const sourceItem = context.sourceItem && typeof context.sourceItem === 'object' ? context.sourceItem : null;
+	if (!sourceItem) {
+		return null;
+	}
+	const parentItem = context.sourceParent && typeof context.sourceParent === 'object' ? context.sourceParent : null;
+	const catalog = summarizeKrask2Catalog(context.catalog ?? null);
+	const metadata = {
+		source: 'krask2',
+	};
+	if (catalog) {
+		metadata.catalog = catalog;
+	}
+	const trailLabels = buildKrask2TrailLabels(catalog, sourceItem, parentItem);
+	if (trailLabels.length > 0) {
+		metadata.menu = {
+			trail_labels: trailLabels,
+		};
+	}
+	const languages = extractKrask2Languages(sourceItem, variant);
+	const season = extractKrask2Number(sourceItem.season ?? parentItem?.season);
+	const episode = extractKrask2Number(sourceItem.episode);
+	const itemMeta = {};
+	if (languages.length > 0) {
+		itemMeta.languages = languages;
+	}
+	if (Number.isFinite(sourceItem.year) && Number(sourceItem.year) > 0) {
+		itemMeta.year = Number(sourceItem.year);
+	}
+	if (season !== null) {
+		itemMeta.season = season;
+	}
+	if (episode !== null) {
+		itemMeta.episode = episode;
+	}
+	const itemPayload = {
+		id: sourceItem.id ?? null,
+		type: typeof sourceItem.type === 'string' ? sourceItem.type : null,
+		title: typeof sourceItem.title === 'string' ? sourceItem.title : context.label ?? null,
+		label: typeof sourceItem.label === 'string' ? sourceItem.label : context.label ?? null,
+	};
+	if (isNonEmptyObject(itemMeta)) {
+		itemPayload.meta = itemMeta;
+	}
+	metadata.item = itemPayload;
+	const hints = buildKrask2Hints({
+		sourceItem,
+		parentItem,
+		languages,
+		season,
+		episode,
+	});
+	if (isNonEmptyObject(hints)) {
+		metadata.hints = hints;
+	}
+	const compacted = compactKraskaMetadata(metadata);
+	return isNonEmptyObject(compacted) ? compacted : null;
+}
+
+function buildKrask2TrailLabels(catalog, sourceItem, parentItem) {
+	const labels = [];
+	const catalogLabel = catalog && typeof catalog.name === 'string' ? catalog.name : null;
+	if (catalogLabel && catalogLabel.trim() !== '') {
+		labels.push(catalogLabel.trim());
+	}
+	const type = typeof sourceItem.type === 'string' ? sourceItem.type : '';
+	if (type === 'episode' || type === 'series') {
+		const seriesTitle = deriveKrask2SeriesTitle(sourceItem, parentItem);
+		if (seriesTitle) {
+			labels.push(seriesTitle);
+		}
+		const seasonNumber = extractKrask2Number(sourceItem.season ?? parentItem?.season);
+		if (seasonNumber !== null) {
+			labels.push(`Season ${String(seasonNumber).padStart(2, '0')}`);
+		}
+	} else {
+		const title = typeof sourceItem.title === 'string' ? sourceItem.title.trim() : '';
+		if (title !== '') {
+			labels.push(title);
+		}
+	}
+	return labels.filter((label, index, array) => label !== '' && array.indexOf(label) === index);
+}
+
+function deriveKrask2SeriesTitle(sourceItem, parentItem) {
+	const parentTitle = parentItem && typeof parentItem.title === 'string' ? parentItem.title.trim() : '';
+	if (parentTitle !== '') {
+		return parentTitle;
+	}
+	const fromItem = typeof sourceItem.series_title === 'string' ? sourceItem.series_title : sourceItem.seriesTitle;
+	if (typeof fromItem === 'string' && fromItem.trim() !== '') {
+		return fromItem.trim();
+	}
+	if ((sourceItem.type === 'series' || sourceItem.type === 'episode') && typeof sourceItem.title === 'string' && sourceItem.title.trim() !== '') {
+		return sourceItem.title.trim();
+	}
+	return null;
+}
+
+function extractKrask2Number(value) {
+	if (value === undefined || value === null) {
+		return null;
+	}
+	const numeric = typeof value === 'number' ? value : Number.parseInt(String(value), 10);
+	return Number.isFinite(numeric) && numeric > 0 ? numeric : null;
+}
+
+function extractKrask2Languages(sourceItem, variant) {
+	if (Array.isArray(sourceItem?.languages) && sourceItem.languages.length > 0) {
+		return normalizeLanguageTokenList(sourceItem.languages, 3);
+	}
+	const variantLabel = typeof variant?.language === 'string' ? variant.language : null;
+	if (variantLabel && variantLabel.trim() !== '') {
+		return normalizeLanguageTokensFromString(variantLabel, 3);
+	}
+	return [];
+}
+
+function buildKrask2Hints({ sourceItem, parentItem, languages, season, episode }) {
+	const hints = {};
+	const seriesTitle = deriveKrask2SeriesTitle(sourceItem, parentItem);
+	if (seriesTitle) {
+		hints.series_title = seriesTitle;
+	}
+	if (season !== null) {
+		hints.season = season;
+		hints.season_label = `Season ${String(season).padStart(2, '0')}`;
+	}
+	if (episode !== null) {
+		hints.episode = episode;
+	}
+	if ((sourceItem.type === 'episode' || episode !== null) && typeof sourceItem.title === 'string' && sourceItem.title.trim() !== '') {
+		hints.episode_title = sourceItem.title.trim();
+	}
+	if (languages.length > 0) {
+		hints.languages = languages.slice(0, 2);
+		const suffix = buildLanguageSuffixFromList(languages);
+		if (suffix) {
+			hints.language_suffix = suffix;
+		}
+	}
+	return hints;
+}
+
 function normalizeKraskaItems(items) {
 	return items.map((item, index) => {
 		const type = typeof item?.type === 'string' ? item.type.toLowerCase() : 'unknown';
@@ -2131,22 +2438,28 @@ async function openKraskaOptionsModal(item) {
 	if (!els.modal) return;
 	const preferredPath = typeof item?.path === 'string' && item.path !== '' ? normalizeKraskaPath(item.path) : null;
 	const preferredIdent = typeof item?.ident === 'string' && item.ident !== '' ? item.ident : null;
-	const externalId = preferredPath ?? preferredIdent;
+	const directExternal = typeof item?.external_id === 'string' && item.external_id !== ''
+		? item.external_id
+		: typeof item?.externalId === 'string' && item.externalId !== ''
+			? item.externalId
+			: null;
+	const externalId = directExternal ?? preferredPath ?? preferredIdent;
 	if (!externalId) {
 		showToast('This entry does not expose downloadable variants.', 'warning');
 		return;
 	}
+	const providerKey = typeof item?.provider === 'string' && item.provider !== '' ? item.provider : 'kraska';
 
 	state.kraska.selectedItem = {
 		label: item?.label ?? item?.title ?? 'Untitled',
 		ident: preferredIdent,
 		path: preferredPath,
-		provider: item?.provider ?? 'kraska',
+		provider: providerKey,
 		externalId,
 		kra_ident: typeof item?.kra_ident === 'string' && item.kra_ident !== '' ? item.kra_ident : null,
 	};
 	if (item && typeof item === 'object' && item !== null) {
-		['cacheKey', 'contextType', 'sourceItem', 'searchIndex', 'kra_ident'].forEach((key) => {
+		['cacheKey', 'contextType', 'sourceItem', 'sourceParent', 'catalog', 'searchIndex', 'kra_ident'].forEach((key) => {
 			if (key in item) {
 				state.kraska.selectedItem[key] = item[key];
 			}
@@ -2156,6 +2469,7 @@ async function openKraskaOptionsModal(item) {
 	state.kraska.variantsLoading = true;
 	state.kraska.variantsError = null;
 	state.kraska.variantQueueing = false;
+	state.kraska.variantsCache = null;
 
 	renderKraskaOptionsModal();
 	els.modal.showModal();
@@ -2167,22 +2481,48 @@ async function openKraskaOptionsModal(item) {
 			state.kraska.variantsError = null;
 			state.kraska.variantsLoading = false;
 			state.kraska.variantQueueing = false;
+			state.kraska.variantsCache = null;
 		},
 		{ once: true }
 	);
 
+	void loadKraskaVariantOptions();
+}
+
+async function loadKraskaVariantOptions(options = {}) {
+	if (!state.user) {
+		showToast('Please sign in first.', 'warning');
+		return;
+	}
+	const context = state.kraska.selectedItem;
+	if (!context || !context.externalId) {
+		return;
+	}
+	const providerKey = context.provider ?? 'kraska';
+	const endpoint = providerKey === 'krask2' ? API.krask2Options : API.kraskaOptions;
+	const params = new URLSearchParams({ external_id: context.externalId });
+	const force = options.force === true;
+	if (force && providerKey === 'krask2') {
+		params.set('refresh', '1');
+	}
+	state.kraska.variantsLoading = true;
+	state.kraska.variantsError = null;
+	state.kraska.variantsCache = null;
+	renderKraskaOptionsModal();
+
 	try {
-		const params = new URLSearchParams({ external_id: externalId });
-		const response = await fetchJson(`${API.kraskaOptions}?${params.toString()}`);
+		const response = await fetchJson(`${endpoint}?${params.toString()}`);
 		const variants = normalizeKraskaVariants(response?.data ?? []);
 		state.kraska.variants = variants;
 		state.kraska.variantsLoading = false;
+		state.kraska.variantsCache = normalizeCacheMeta(response?.cache ?? null);
 		if (variants.length === 0) {
 			state.kraska.variantsError = 'No download options available for this entry.';
 		}
 	} catch (error) {
 		state.kraska.variantsLoading = false;
 		state.kraska.variantsError = messageFromError(error);
+		state.kraska.variantsCache = null;
 	} finally {
 		renderKraskaOptionsModal();
 	}
@@ -2196,6 +2536,16 @@ function renderKraskaOptionsModal() {
 	const variants = state.kraska.variants ?? [];
 	const loading = Boolean(state.kraska.variantsLoading);
 	const error = state.kraska.variantsError ?? null;
+ 	const isKrask2 = (context.provider ?? 'kraska') === 'krask2';
+ 	const cacheLabel = isKrask2
+ 		? buildCacheMetaText(state.kraska.variantsCache ?? { hit: false }, 'Streams cached', 'Streams fetched live')
+ 		: '';
+ 	const refreshButton = isKrask2
+ 		? `<button type="button" data-krask2-options-refresh class="rounded-lg border border-slate-700/60 bg-slate-950/60 px-3 py-1 text-xs font-semibold text-slate-200 transition hover:border-brand-400/60 hover:text-brand-200 disabled:cursor-not-allowed disabled:opacity-50" ${loading ? 'disabled' : ''}>Refresh streams</button>`
+ 		: '';
+ 	const cacheMetaRow = isKrask2
+ 		? `<div class="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs">${cacheLabel ? `<span class="rounded-full border border-slate-800/60 bg-slate-900/40 px-2 py-0.5 text-slate-300">${escapeHtml(cacheLabel)}</span>` : '<span class="text-slate-500">Cache metadata unavailable</span>'}${refreshButton}</div>`
+ 		: '';
 
 	let bodyContent = '';
 	if (loading) {
@@ -2217,6 +2567,7 @@ function renderKraskaOptionsModal() {
 			<header>
 				<h3 class="text-lg font-semibold text-slate-100">Download options</h3>
 				<p class="mt-1 text-sm text-slate-400">${escapeHtml(title)}</p>
+				${cacheMetaRow}
 			</header>
 			<div class="modal-body space-y-4">
 				${bodyContent}
@@ -2230,6 +2581,13 @@ function renderKraskaOptionsModal() {
 	const closeBtn = els.modal.querySelector('[data-close]');
 	closeBtn?.addEventListener('click', () => {
 		els.modal.close();
+	});
+
+	const refreshBtn = els.modal.querySelector('[data-krask2-options-refresh]');
+	refreshBtn?.addEventListener('click', () => {
+		if (!state.kraska.variantsLoading) {
+			void loadKraskaVariantOptions({ force: true });
+		}
 	});
 
 	els.modal.querySelectorAll('[data-kraska-queue-variant]').forEach((button) => {
@@ -2339,15 +2697,6 @@ async function queueKraskaVariant(index, button) {
 	const variant = state.kraska.variants[index];
 	const context = state.kraska.selectedItem;
 	if (!variant || !context) return;
-	const targetIdent = typeof variant.kra_ident === 'string' && variant.kra_ident !== ''
-		? variant.kra_ident
-		: typeof variant.id === 'string' && variant.id !== ''
-			? variant.id
-			: context.externalId;
-	if (!targetIdent) {
-		showToast('Missing ident for selected option.', 'error');
-		return;
-	}
 
 	state.kraska.variantQueueing = true;
 	if (button instanceof HTMLButtonElement) {
@@ -2355,25 +2704,12 @@ async function queueKraskaVariant(index, button) {
 		button.textContent = 'Queuing…';
 	}
 
-	const titleParts = [context.label ?? 'Kra.sk item'];
-	if (variant.title) {
-		titleParts.push(variant.title);
-	} else if (variant.quality) {
-		titleParts.push(variant.quality);
-	}
-	const jobTitle = titleParts.filter(Boolean).join(' • ');
-
 	try {
+		const payloadItem = buildQueuePayloadFromVariant(context, variant);
 		await fetchJson(API.queue, {
 			method: 'POST',
 			body: JSON.stringify({
-				items: [
-					{
-						provider: 'kraska',
-						external_id: targetIdent,
-						title: jobTitle,
-					},
-				],
+				items: [payloadItem],
 			}),
 		});
 		showToast('Download queued.', 'success');
@@ -2396,6 +2732,1254 @@ async function queueKraskaVariant(index, button) {
 			button.textContent = 'Queue this option';
 		}
 	}
+}
+
+function setKraskaMode(mode) {
+	const normalized = mode === 'krask2' ? 'krask2' : 'kraska';
+	if (state.kraska.mode === normalized) {
+		if (normalized === 'krask2') {
+			ensureKrask2Initialized();
+		} else {
+			ensureKraskaMenuReady();
+		}
+		return;
+	}
+
+	state.kraska.mode = normalized;
+	updateKraskaProviderToggle();
+	if (normalized === 'krask2') {
+		state.kraska.selected.clear();
+		updateKraskaQueueButton();
+		ensureKrask2Initialized();
+	} else {
+		ensureKraskaMenuReady();
+	}
+}
+
+function updateKraskaProviderToggle() {
+	const mode = state.kraska.mode === 'krask2' ? 'krask2' : 'kraska';
+	if (els.kraskaProviderToggle) {
+		const buttons = els.kraskaProviderToggle.querySelectorAll('[data-kraska-provider]');
+		buttons.forEach((button) => {
+			const isActive = button.dataset.kraskaProvider === mode;
+			button.classList.toggle('text-slate-100', isActive);
+			button.classList.toggle('text-slate-300/70', !isActive);
+			button.classList.toggle('bg-slate-900/40', isActive);
+		});
+	}
+	toggleElement(els.kraskaMenuControls, mode === 'kraska');
+	toggleElement(els.kraskaMenuView, mode === 'kraska');
+	toggleElement(els.krask2View, mode === 'krask2');
+}
+
+function ensureKrask2Initialized() {
+	if (!state.user) return;
+	if ((!Array.isArray(state.krask2.catalogs) || state.krask2.catalogs.length === 0) && !state.krask2.catalogsLoading) {
+		loadKrask2Catalogs();
+	} else {
+		renderKrask2View();
+	}
+}
+
+async function loadKrask2Catalogs(options = {}) {
+	if (!state.user) {
+		showToast('Please sign in first.', 'warning');
+		return;
+	}
+	const force = options.force === true;
+	if (!force && (state.krask2.catalogsLoading || (Array.isArray(state.krask2.catalogs) && state.krask2.catalogs.length > 0))) {
+		renderKrask2View();
+		return;
+	}
+	state.krask2.catalogsLoading = true;
+	state.krask2.catalogsError = null;
+	state.krask2.catalogCache = null;
+	renderKrask2View();
+
+	try {
+		const params = new URLSearchParams({ t: String(Date.now()) });
+		if (force) {
+			params.set('refresh', '1');
+		}
+		const response = await fetchJson(`${API.krask2Catalogs}?${params.toString()}`);
+		const manifest = response?.data?.manifest ?? null;
+		const catalogs = Array.isArray(response?.data?.catalogs) ? response.data.catalogs : [];
+		const cacheMeta = normalizeCacheMeta(response?.cache ?? null);
+		state.krask2.manifest = manifest;
+		state.krask2.catalogs = catalogs;
+		state.krask2.catalogCache = cacheMeta;
+		const firstKey = catalogs.map((catalog) => krask2CatalogKey(catalog)).find((key) => key !== '') ?? null;
+		const currentKey = state.krask2.selectedCatalogKey;
+		if (!currentKey || !catalogs.some((catalog) => krask2CatalogKey(catalog) === currentKey)) {
+			state.krask2.selectedCatalogKey = firstKey;
+		}
+		if (force) {
+			showToast('Catalogs refreshed.', 'success');
+		}
+	} catch (error) {
+		state.krask2.catalogsError = messageFromError(error);
+		state.krask2.catalogs = [];
+		state.krask2.selectedCatalogKey = null;
+		state.krask2.items = [];
+		state.krask2.meta = {};
+		state.krask2.itemsRequested = false;
+		state.krask2.catalogCache = null;
+	} finally {
+		state.krask2.catalogsLoading = false;
+		renderKrask2View();
+	}
+}
+
+function renderKrask2CatalogOptions() {
+	const select = els.krask2CatalogSelect;
+	if (!(select instanceof HTMLSelectElement)) return;
+	const catalogs = Array.isArray(state.krask2.catalogs) ? state.krask2.catalogs : [];
+	if (catalogs.length === 0) {
+		select.innerHTML = '<option value="">No catalogs available</option>';
+		select.value = '';
+		select.setAttribute('disabled', 'true');
+		return;
+	}
+	select.removeAttribute('disabled');
+	const options = catalogs
+		.map((catalog) => {
+			const key = krask2CatalogKey(catalog);
+			const label = typeof catalog.name === 'string' && catalog.name.trim() !== '' ? catalog.name.trim() : catalog.id ?? 'Catalog';
+			const typeLabel = typeof catalog.type === 'string' && catalog.type !== '' ? catalog.type.toUpperCase() : 'ANY';
+			const selected = key !== '' && key === state.krask2.selectedCatalogKey ? 'selected' : '';
+			return `<option value="${escapeHtml(key)}" ${selected}>${escapeHtml(`${label} (${typeLabel})`)}</option>`;
+		})
+		.join('');
+	select.innerHTML = options;
+	if (state.krask2.selectedCatalogKey) {
+		select.value = state.krask2.selectedCatalogKey;
+	} else {
+		select.value = '';
+	}
+}
+
+function krask2CatalogKey(catalog) {
+	if (!catalog || typeof catalog !== 'object') return '';
+	const type = typeof catalog.type === 'string' ? catalog.type.toLowerCase() : '';
+	const id = typeof catalog.id === 'string' ? catalog.id : '';
+	if (type === '' || id === '') return '';
+	return `${type}|${id}`;
+}
+
+function getSelectedKrask2Catalog() {
+	const key = state.krask2.selectedCatalogKey;
+	if (!key) return null;
+	return (state.krask2.catalogs ?? []).find((catalog) => krask2CatalogKey(catalog) === key) ?? null;
+}
+
+function summarizeKrask2Catalog(catalog) {
+	if (!catalog || typeof catalog !== 'object') {
+		return null;
+	}
+	const summary = {};
+	if (typeof catalog.id === 'string' && catalog.id !== '') {
+		summary.id = catalog.id;
+	}
+	if (typeof catalog.type === 'string' && catalog.type !== '') {
+		summary.type = catalog.type.toLowerCase();
+	}
+	if (typeof catalog.name === 'string' && catalog.name.trim() !== '') {
+		summary.name = catalog.name.trim();
+	}
+	return Object.keys(summary).length > 0 ? summary : null;
+}
+
+function setKrask2SelectedCatalog(value) {
+	const resolved = typeof value === 'string' && value !== '' ? value : null;
+	if (resolved) {
+		const exists = (state.krask2.catalogs ?? []).some((catalog) => krask2CatalogKey(catalog) === resolved);
+		state.krask2.selectedCatalogKey = exists ? resolved : null;
+	} else {
+		state.krask2.selectedCatalogKey = null;
+	}
+	state.krask2.items = [];
+	state.krask2.meta = {};
+	state.krask2.itemsRequested = false;
+	state.krask2.itemsError = null;
+	state.krask2.itemsCache = null;
+	resetKrask2Selection();
+	renderKrask2View();
+}
+
+function resetKrask2Selection() {
+	state.krask2.selected = new Map();
+	state.krask2.queueLabel = '';
+	updateKrask2QueueButton();
+}
+
+async function loadKrask2Items(options = {}) {
+	if (!state.user) {
+		showToast('Please sign in first.', 'warning');
+		return;
+	}
+	const catalog = getSelectedKrask2Catalog();
+	if (!catalog) {
+		showToast('Select a catalog first.', 'warning');
+		return;
+	}
+	const searchTerm = typeof els.krask2SearchInput?.value === 'string' ? els.krask2SearchInput.value.trim() : '';
+	state.krask2.searchTerm = searchTerm;
+	state.krask2.itemsLoading = true;
+	state.krask2.itemsError = null;
+	state.krask2.itemsRequested = true;
+	state.krask2.items = [];
+	state.krask2.itemsCache = null;
+	state.krask2.meta = {};
+	resetKrask2Selection();
+	renderKrask2View();
+	const force = options.force === true;
+
+	try {
+		const params = new URLSearchParams({
+			type: String(catalog.type ?? ''),
+			id: String(catalog.id ?? ''),
+		});
+		if (searchTerm !== '') {
+			params.set('search', searchTerm);
+		}
+		if (force) {
+			params.set('refresh', '1');
+		}
+		const response = await fetchJson(`${API.krask2CatalogItems}?${params.toString()}`);
+		const rawItems = Array.isArray(response?.data) ? response.data : [];
+		const cacheMeta = normalizeCacheMeta(response?.cache ?? null);
+		state.krask2.items = normalizeKrask2Items(rawItems, catalog);
+		state.krask2.lastLoadedSearch = searchTerm;
+		state.krask2.itemsCache = cacheMeta;
+	} catch (error) {
+		state.krask2.itemsError = messageFromError(error);
+		state.krask2.items = [];
+		state.krask2.itemsCache = null;
+	} finally {
+		state.krask2.itemsLoading = false;
+		renderKrask2View();
+	}
+}
+
+function normalizeKrask2Items(rawItems, catalog) {
+	if (!Array.isArray(rawItems)) {
+		return [];
+	}
+	return rawItems
+		.map((item, index) => normalizeKrask2Item(item, catalog, index))
+		.filter(Boolean);
+}
+
+function normalizeKrask2Item(meta, catalog, index) {
+	if (!meta || typeof meta !== 'object') return null;
+	const id = typeof meta.id === 'string' && meta.id !== '' ? meta.id : `catalog-${index}`;
+	const title = typeof meta.name === 'string' && meta.name.trim() !== ''
+		? meta.name.trim()
+		: typeof meta.title === 'string' && meta.title.trim() !== ''
+			? meta.title.trim()
+			: null;
+	if (!title) return null;
+	const typeRaw = typeof meta.type === 'string' && meta.type !== '' ? meta.type.toLowerCase() : (typeof catalog?.type === 'string' ? catalog.type.toLowerCase() : 'movie');
+	const description = typeof meta.description === 'string' && meta.description.trim() !== ''
+		? meta.description.trim()
+		: typeof meta.overview === 'string' && meta.overview.trim() !== ''
+			? meta.overview.trim()
+			: null;
+	const poster = typeof meta.poster === 'string' && meta.poster !== ''
+		? meta.poster
+		: typeof meta.background === 'string' && meta.background !== ''
+			? meta.background
+			: typeof meta.logo === 'string' && meta.logo !== ''
+				? meta.logo
+				: null;
+	const externalId = typeof meta.external_id === 'string' && meta.external_id !== '' ? meta.external_id : null;
+
+	return {
+		id,
+		label: title,
+		title,
+		type: typeRaw,
+		description,
+		poster,
+		catalogLabel: typeof catalog?.name === 'string' ? catalog.name : null,
+		external_id: externalId,
+		externalId,
+		year: parseKrask2Year(meta.year ?? meta.releaseInfo ?? meta.releaseInfoShort ?? null),
+		imdbRating: Number.isFinite(Number(meta.imdbRating ?? meta.rating)) ? Number(meta.imdbRating ?? meta.rating) : null,
+		runtimeMinutes: parseKrask2RuntimeMinutes(meta.runtime ?? meta.runtimeMinutes ?? null),
+		genres: normalizeKrask2Genres(meta.genres ?? meta.genre ?? null),
+		languages: normalizeKrask2Languages(meta.languages ?? meta.language ?? meta.lang ?? null),
+		provider: 'krask2',
+		source: meta,
+	};
+}
+
+function normalizeKrask2Genres(value) {
+	if (Array.isArray(value)) {
+		return value.map((genre) => (typeof genre === 'string' ? genre.trim() : '')).filter((genre) => genre !== '');
+	}
+	if (typeof value === 'string' && value.trim() !== '') {
+		return value
+			.split(/[,/]/)
+			.map((part) => part.trim())
+			.filter((part) => part !== '');
+	}
+	return [];
+}
+
+function normalizeKrask2Languages(value) {
+	if (Array.isArray(value)) {
+		return normalizeLanguageTokenList(value, 3);
+	}
+	if (typeof value === 'string' && value.trim() !== '') {
+		const tokens = value
+			.split(/[,/]/)
+			.map((part) => part.trim())
+			.filter((part) => part !== '');
+		return normalizeLanguageTokenList(tokens, 3);
+	}
+	return [];
+}
+
+function parseKrask2Year(value) {
+	const numeric = Number.parseInt(value, 10);
+	if (Number.isFinite(numeric) && numeric > 1900) {
+		return numeric;
+	}
+	if (typeof value === 'string') {
+		const match = value.match(/(19|20)\d{2}/);
+		if (match) {
+			return Number.parseInt(match[0], 10);
+		}
+	}
+	return null;
+}
+
+function parseKrask2RuntimeMinutes(value) {
+	if (typeof value === 'number' && Number.isFinite(value)) {
+		return value;
+	}
+	if (typeof value !== 'string' || value.trim() === '') {
+		return null;
+	}
+	const numeric = Number.parseInt(value, 10);
+	if (Number.isFinite(numeric)) {
+		return numeric;
+	}
+	const isoMatch = value.match(/PT(?:(\d+)H)?(?:(\d+)M)?/i);
+	if (isoMatch) {
+		const hours = Number.parseInt(isoMatch[1] ?? '0', 10) || 0;
+		const minutes = Number.parseInt(isoMatch[2] ?? '0', 10) || 0;
+		return hours * 60 + minutes;
+	}
+	return null;
+}
+
+function renderKrask2View() {
+	renderKrask2CatalogOptions();
+	const errorMessage = state.krask2.itemsError ?? state.krask2.catalogsError;
+	if (els.krask2Error) {
+		if (errorMessage) {
+			els.krask2Error.textContent = errorMessage;
+			toggleElement(els.krask2Error, true);
+		} else {
+			toggleElement(els.krask2Error, false);
+		}
+	}
+	const isLoading = Boolean(state.krask2.catalogsLoading || state.krask2.itemsLoading);
+	toggleElement(els.krask2Loading, isLoading);
+	const showEmpty = !isLoading && !errorMessage && state.krask2.itemsRequested && state.krask2.items.length === 0;
+	toggleElement(els.krask2Empty, showEmpty);
+
+	if (els.krask2List) {
+		if (!Array.isArray(state.krask2.items) || state.krask2.items.length === 0) {
+			els.krask2List.innerHTML = '';
+		} else {
+			els.krask2List.innerHTML = state.krask2.items.map((item, index) => renderKrask2Item(item, index)).join('');
+			state.krask2.items.forEach((item, index) => {
+				if (item.type === 'series') {
+					renderKrask2Episodes(index);
+				}
+			});
+		}
+	}
+
+	if (els.krask2LoadBtn) {
+		const catalog = getSelectedKrask2Catalog();
+		els.krask2LoadBtn.disabled = state.krask2.itemsLoading || !catalog;
+		els.krask2LoadBtn.textContent = state.krask2.itemsLoading ? 'Loading…' : 'Load items';
+	}
+
+	if (els.krask2RefreshBtn) {
+		els.krask2RefreshBtn.disabled = state.krask2.catalogsLoading;
+		els.krask2RefreshBtn.textContent = state.krask2.catalogsLoading ? 'Refreshing…' : 'Refresh catalogs';
+	}
+
+	if (els.krask2ItemsRefreshBtn) {
+		const catalog = getSelectedKrask2Catalog();
+		const busy = state.krask2.itemsLoading;
+		const ready = catalog && state.krask2.itemsRequested;
+		els.krask2ItemsRefreshBtn.disabled = busy || !ready;
+		els.krask2ItemsRefreshBtn.textContent = busy ? 'Refreshing…' : 'Refresh results';
+	}
+
+	renderKrask2CatalogCacheMeta();
+	renderKrask2ItemsCacheMeta();
+	updateKrask2QueueButton();
+}
+
+function renderKrask2Item(item, index) {
+	const metaState = getKrask2MetaState(item.id);
+	const description = item.description ? `<p class="text-sm text-slate-400">${escapeHtml(item.description)}</p>` : '';
+	const chips = renderKrask2MetaChips(item);
+	const poster = item.poster
+		? `<img src="${escapeHtml(item.poster)}" alt="${escapeHtml(item.title)}" class="h-24 w-24 rounded-xl object-cover" loading="lazy" />`
+		: '<div class="flex h-24 w-24 items-center justify-center rounded-xl bg-slate-800/70 text-3xl">🎬</div>';
+	const actions = [];
+	if (item.external_id) {
+		actions.push(`<button type="button" data-krask2-options="${index}" class="rounded-lg border border-slate-700/60 bg-slate-950/60 px-3 py-1.5 text-xs font-semibold text-slate-200 transition hover:border-brand-400/60 hover:text-brand-200">Download options</button>`);
+	}
+	if (item.type === 'series') {
+		const loading = metaState?.loading;
+		const expanded = metaState?.expanded;
+		let label = 'Show episodes';
+		if (loading) {
+			label = 'Loading…';
+		} else if (expanded) {
+			label = 'Hide episodes';
+		}
+		actions.push(`<button type="button" data-krask2-episodes-toggle="${index}" class="rounded-lg border border-slate-700/60 bg-slate-950/60 px-3 py-1.5 text-xs font-semibold text-slate-200 transition hover:border-brand-400/60 hover:text-brand-200 disabled:cursor-not-allowed disabled:opacity-50" ${loading ? 'disabled' : ''}>${escapeHtml(label)}</button>`);
+	}
+	const selectionControl = buildKrask2ItemSelectionControl(item, index);
+	if (selectionControl) {
+		actions.push(selectionControl);
+	}
+	const catalogLabel = item.catalogLabel ? `<span class="rounded-full border border-slate-800/60 bg-slate-950/50 px-2 py-0.5 text-[11px] uppercase tracking-wide text-slate-400">${escapeHtml(item.catalogLabel)}</span>` : '';
+	const episodesContainer = item.type === 'series'
+		? `<div data-krask2-episodes="${index}" class="mt-3 hidden space-y-2 rounded-xl border border-slate-800/60 bg-slate-900/40 p-4 text-sm"></div>`
+		: '';
+
+	return `
+		<li class="rounded-2xl border border-slate-800/70 bg-slate-900/60 p-4">
+			<div class="flex flex-col gap-4 md:flex-row">
+				${poster}
+				<div class="flex-1 space-y-2">
+					<div class="flex flex-wrap items-center gap-2">
+						<h4 class="text-lg font-semibold text-slate-100">${escapeHtml(item.title)}</h4>
+						<span class="rounded-full border border-slate-800/60 bg-slate-950/50 px-2 py-0.5 text-[11px] uppercase tracking-wide text-slate-400">${escapeHtml(item.type)}</span>
+						${catalogLabel}
+					</div>
+					${description}
+					${chips}
+					${actions.length > 0 ? `<div class="flex flex-wrap gap-2">${actions.join('')}</div>` : ''}
+					${episodesContainer}
+				</div>
+			</div>
+		</li>
+	`;
+}
+
+function buildKrask2ItemSelectionControl(item, index) {
+	const kind = item.type === 'series' ? 'series' : 'movie';
+	if (kind === 'movie' && (!item.external_id || item.external_id === '')) {
+		return '';
+	}
+	const key = buildKrask2SelectionKey(kind, item.id, null);
+	const checked = isKrask2SelectionMarked(key) ? 'checked' : '';
+	const label = kind === 'series' ? 'Select entire series' : 'Select movie';
+	return `
+		<label class="inline-flex items-center gap-2 rounded-lg border border-slate-700/60 bg-slate-950/60 px-3 py-1.5 text-xs font-semibold text-slate-200">
+			<input type="checkbox" data-krask2-item-select="1" data-krask2-select-kind="${kind}" data-krask2-item-index="${index}" data-krask2-selection-key="${escapeHtml(key)}" class="h-4 w-4 rounded border-slate-600 bg-slate-800 text-brand-500 focus:ring-brand-500/60" ${checked} />
+			<span>${escapeHtml(label)}</span>
+		</label>
+	`;
+}
+
+function renderKrask2MetaChips(item) {
+	const chips = [];
+	if (item.year) chips.push(String(item.year));
+	if (item.runtimeMinutes) chips.push(formatDuration(item.runtimeMinutes * 60));
+	if (Number.isFinite(item.imdbRating)) chips.push(`${Number(item.imdbRating).toFixed(1)}★`);
+	if (Array.isArray(item.languages) && item.languages.length > 0) chips.push(item.languages.join('/'));
+	if (Array.isArray(item.genres) && item.genres.length > 0) chips.push(item.genres.slice(0, 2).join(', '));
+	if (chips.length === 0) return '';
+	return `
+		<div class="flex flex-wrap gap-2 text-xs text-slate-300">
+			${chips
+				.map((chip) => `<span class="rounded-full border border-slate-800/60 bg-slate-900/40 px-2 py-0.5">${escapeHtml(String(chip))}</span>`)
+				.join('')}
+		</div>
+	`;
+}
+
+function openKrask2Options(index) {
+	const item = state.krask2.items[index];
+	if (!item) return;
+	if (!item.external_id) {
+		showToast('No download options available for this entry.', 'warning');
+		return;
+	}
+	openKraskaOptionsModal({
+		label: item.title,
+		title: item.title,
+		external_id: item.external_id,
+		provider: 'krask2',
+		contextType: 'krask2',
+		sourceItem: item,
+		catalog: summarizeKrask2Catalog(getSelectedKrask2Catalog()),
+	});
+}
+
+function toggleKrask2Episodes(index) {
+	const item = state.krask2.items[index];
+	if (!item || item.type !== 'series') return;
+	const metaState = getKrask2MetaState(item.id, true);
+	if (!metaState) return;
+	if (metaState.loading) return;
+	if (Array.isArray(metaState.videos) && metaState.videos.length > 0) {
+		metaState.expanded = !metaState.expanded;
+		renderKrask2Episodes(index);
+		return;
+	}
+	metaState.expanded = true;
+	loadKrask2Episodes(item, index);
+}
+
+function getKrask2MetaState(itemId, create = false) {
+	const key = typeof itemId === 'string' ? itemId : '';
+	if (key === '') return null;
+	if (!state.krask2.meta[key] && create) {
+		state.krask2.meta[key] = { loading: false, error: null, videos: [], expanded: false, cache: null };
+	}
+	return state.krask2.meta[key] ?? null;
+}
+
+async function loadKrask2Episodes(item, itemIndex, options = {}) {
+	if (!state.user) {
+		showToast('Please sign in first.', 'warning');
+		return;
+	}
+	const metaState = getKrask2MetaState(item.id, true);
+	if (!metaState || metaState.loading) return;
+	metaState.loading = true;
+	metaState.error = null;
+	metaState.cache = null;
+	renderKrask2Episodes(itemIndex);
+	const force = options.force === true;
+	try {
+		const { videos, cache } = await fetchKrask2EpisodesPayload(item, { force });
+		metaState.videos = videos;
+		metaState.cache = cache;
+	} catch (error) {
+		metaState.videos = [];
+		metaState.error = messageFromError(error);
+		metaState.cache = null;
+	} finally {
+		metaState.loading = false;
+		state.krask2.meta[item.id] = metaState;
+		renderKrask2Episodes(itemIndex);
+	}
+}
+
+async function fetchKrask2EpisodesPayload(item, options = {}) {
+	const params = new URLSearchParams({ type: item.type, id: item.id });
+	if (options.force) {
+		params.set('refresh', '1');
+	}
+	const response = await fetchJson(`${API.krask2Meta}?${params.toString()}`);
+	const payload = response?.data?.meta ?? response?.data ?? {};
+	const videos = Array.isArray(payload?.videos) ? payload.videos : [];
+	return {
+		videos: normalizeKrask2Episodes(videos),
+		cache: normalizeCacheMeta(response?.cache ?? null),
+	};
+}
+
+function normalizeKrask2Episodes(videos) {
+	if (!Array.isArray(videos)) return [];
+	return videos
+		.map((video, index) => normalizeKrask2Episode(video, index))
+		.filter(Boolean);
+}
+
+function normalizeKrask2Episode(video, index) {
+	if (!video || typeof video !== 'object') return null;
+	const id = typeof video.id === 'string' && video.id !== '' ? video.id : `episode-${index}`;
+	const title = typeof video.name === 'string' && video.name.trim() !== ''
+		? video.name.trim()
+		: typeof video.title === 'string' && video.title.trim() !== ''
+			? video.title.trim()
+			: `Episode ${index + 1}`;
+	const season = Number.parseInt(video.season ?? video.Season ?? '', 10);
+	const episode = Number.parseInt(video.episode ?? video.Episode ?? '', 10);
+	const externalId = typeof video.external_id === 'string' && video.external_id !== '' ? video.external_id : null;
+	const description = typeof video.overview === 'string' && video.overview.trim() !== ''
+		? video.overview.trim()
+		: typeof video.description === 'string' && video.description.trim() !== ''
+			? video.description.trim()
+			: null;
+	const languages = normalizeKrask2Languages(video.languages ?? video.language ?? video.lang ?? null);
+	const seriesTitle = typeof video.series_title === 'string' && video.series_title.trim() !== ''
+		? video.series_title.trim()
+		: typeof video.seriesTitle === 'string' && video.seriesTitle.trim() !== ''
+			? video.seriesTitle.trim()
+			: typeof video.series === 'string' && video.series.trim() !== ''
+				? video.series.trim()
+				: null;
+	const seriesId = typeof video.series_id === 'string' && video.series_id !== '' ? video.series_id : null;
+	const episodeData = {
+		id,
+		title,
+		type: 'episode',
+		season: Number.isFinite(season) ? season : null,
+		episode: Number.isFinite(episode) ? episode : null,
+		description,
+		languages,
+		external_id: externalId,
+		externalId,
+		series_title: seriesTitle,
+		series_id: seriesId,
+		label: null,
+	};
+	episodeData.label = buildKrask2EpisodeLabel(episodeData);
+	return episodeData;
+}
+
+function buildKrask2EpisodeLabel(episode) {
+	const parts = [];
+	if (Number.isFinite(episode.season) || Number.isFinite(episode.episode)) {
+		const seasonLabel = Number.isFinite(episode.season) ? String(episode.season).padStart(2, '0') : '??';
+		const episodeLabel = Number.isFinite(episode.episode) ? String(episode.episode).padStart(2, '0') : '??';
+		parts.push(`S${seasonLabel}E${episodeLabel}`);
+	}
+	if (episode.title) {
+		parts.push(episode.title);
+	}
+	return parts.length > 0 ? parts.join(' • ') : episode.title ?? 'Episode';
+}
+
+function renderKrask2Episodes(itemIndex) {
+	if (!els.krask2List) return;
+	const container = els.krask2List.querySelector(`[data-krask2-episodes="${itemIndex}"]`);
+	if (!(container instanceof HTMLElement)) return;
+	const item = state.krask2.items[itemIndex];
+	if (!item || item.type !== 'series') {
+		container.classList.add('hidden');
+		container.innerHTML = '';
+		return;
+	}
+	const metaState = getKrask2MetaState(item.id);
+	if (!metaState || !metaState.expanded) {
+		container.classList.add('hidden');
+		container.innerHTML = '';
+		return;
+	}
+	container.classList.remove('hidden');
+	if (metaState.loading) {
+		container.innerHTML = '<div class="text-sm text-brand-300">Loading episodes…</div>';
+		return;
+	}
+	const header = buildKrask2EpisodesHeader(metaState, itemIndex);
+	if (metaState.error) {
+		container.innerHTML = `${header}<div class="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">${escapeHtml(metaState.error)}</div>`;
+		return;
+	}
+	if (!Array.isArray(metaState.videos) || metaState.videos.length === 0) {
+		container.innerHTML = `${header}<div class="text-sm text-slate-400">No episodes returned for this series.</div>`;
+		return;
+	}
+	const grouped = groupKrask2Episodes(metaState.videos);
+	const body = grouped
+		.map((group) => renderKrask2SeasonBlock(group, itemIndex))
+		.join('');
+	container.innerHTML = `${header}${body}`;
+}
+
+function buildKrask2EpisodesHeader(metaState, itemIndex) {
+	const label = buildCacheMetaText(metaState.cache ?? { hit: false }, 'Episodes cached', 'Episodes fetched live');
+	const badge = label
+		? `<span class="rounded-full border border-slate-800/60 bg-slate-900/40 px-2 py-0.5 text-[11px] uppercase tracking-wide text-slate-300">${escapeHtml(label)}</span>`
+		: '';
+	const disabled = metaState.loading ? 'disabled' : '';
+	return `
+		<div class="mb-3 flex flex-wrap items-center justify-between gap-2 text-xs">
+			<div class="text-slate-400">${badge}</div>
+			<button type="button" data-krask2-episodes-refresh="${itemIndex}" class="rounded-lg border border-slate-700/60 bg-slate-950/60 px-3 py-1 font-semibold text-slate-200 transition hover:border-brand-400/60 hover:text-brand-200 disabled:cursor-not-allowed disabled:opacity-50" ${disabled}>Refresh episodes</button>
+		</div>
+	`;
+}
+
+function renderKrask2EpisodeItem(video, itemIndex, episodeIndex) {
+	const seriesItem = state.krask2.items[itemIndex];
+	const description = video.description ? `<p class="text-xs text-slate-400">${escapeHtml(video.description)}</p>` : '';
+	const languages = Array.isArray(video.languages) && video.languages.length > 0 ? `<span class="text-[11px] uppercase tracking-wide text-slate-400">${escapeHtml(video.languages.join(', '))}</span>` : '';
+	const disabled = video.external_id ? '' : 'disabled';
+	const label = video.label ?? buildKrask2EpisodeLabel(video);
+	const key = seriesItem ? buildKrask2SelectionKey('episode', seriesItem.id, video.id) : '';
+	const checked = key && isKrask2SelectionMarked(key) ? 'checked' : '';
+	const selectionControl = video.external_id && key
+		? `<input type="checkbox" data-krask2-episode-select="1" data-krask2-item-index="${itemIndex}" data-krask2-episode-index="${episodeIndex}" data-krask2-selection-key="${escapeHtml(key)}" class="h-4 w-4 rounded border-slate-600 bg-slate-800 text-brand-500 focus:ring-brand-500/60" ${checked} />`
+		: '';
+	return `
+		<li class="rounded-lg border border-slate-800/50 bg-slate-950/40 p-3">
+			<div class="flex flex-col gap-3">
+				<div class="flex flex-wrap items-start gap-3">
+					${selectionControl ? `<label class="inline-flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wide text-slate-300">${selectionControl}<span>Select</span></label>` : ''}
+					<div>
+						<p class="text-sm font-semibold text-slate-100">${escapeHtml(label)}</p>
+						${languages}
+						${description}
+					</div>
+				</div>
+				<div class="flex flex-wrap items-center justify-between gap-3">
+					<div class="text-[11px] text-slate-500">${video.season ? `S${String(video.season).padStart(2, '0')}` : ''}${video.episode ? `E${String(video.episode).padStart(2, '0')}` : ''}</div>
+					<button type="button" data-krask2-episode-options="${itemIndex}:${episodeIndex}" class="rounded-lg border border-slate-700/60 bg-slate-950/60 px-3 py-1.5 text-xs font-semibold text-slate-200 transition hover:border-brand-400/60 hover:text-brand-200 disabled:cursor-not-allowed disabled:opacity-50" ${disabled}>${video.external_id ? 'Download options' : 'Unavailable'}</button>
+				</div>
+			</div>
+		</li>
+	`;
+}
+
+function groupKrask2Episodes(videos) {
+	const buckets = new Map();
+	videos.forEach((video, index) => {
+		const rawSeason = Number.isFinite(video?.season) ? Number(video.season) : null;
+		const key = rawSeason === null ? 'specials' : String(rawSeason);
+		if (!buckets.has(key)) {
+			buckets.set(key, []);
+		}
+		buckets.get(key).push({ video, index });
+	});
+	const sortedKeys = Array.from(buckets.keys()).sort((a, b) => {
+		if (a === 'specials') return 1;
+		if (b === 'specials') return -1;
+		return Number(a) - Number(b);
+	});
+	return sortedKeys.map((key) => ({
+		season: key === 'specials' ? null : Number(key),
+		entries: buckets.get(key) ?? [],
+	}));
+}
+
+function renderKrask2SeasonBlock(group, itemIndex) {
+	const seriesItem = state.krask2.items[itemIndex];
+	const seasonNumber = group.season;
+	const label = formatKrask2SeasonLabel(seasonNumber);
+	const key = seriesItem ? buildKrask2SelectionKey('season', seriesItem.id, seasonNumber) : '';
+	const checked = key && isKrask2SelectionMarked(key) ? 'checked' : '';
+	const entries = group.entries
+		.map(({ video, index }) => renderKrask2EpisodeItem(video, itemIndex, index))
+		.join('');
+	const selectionControl = seriesItem && key
+		? `<label class="inline-flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wide text-slate-300">
+			<input type="checkbox" data-krask2-season-select="1" data-krask2-item-index="${itemIndex}" data-krask2-season-number="${seasonNumber === null ? 'null' : String(seasonNumber)}" data-krask2-selection-key="${escapeHtml(key)}" class="h-4 w-4 rounded border-slate-600 bg-slate-800 text-brand-500 focus:ring-brand-500/60" ${checked} />
+			<span>Select season</span>
+		</label>`
+		: '';
+	return `
+		<div class="space-y-2 rounded-xl border border-slate-800/60 bg-slate-900/40 px-3 py-2">
+			<div class="flex flex-wrap items-center justify-between gap-2">
+				<p class="text-xs font-semibold uppercase tracking-wide text-slate-300">${escapeHtml(label)}</p>
+				${selectionControl}
+			</div>
+			<ul class="space-y-2">
+				${entries}
+			</ul>
+		</div>
+	`;
+}
+
+function formatKrask2SeasonLabel(seasonNumber) {
+	if (seasonNumber === null) {
+		return 'Specials';
+	}
+	const padded = String(seasonNumber).padStart(2, '0');
+	return `Season ${padded}`;
+}
+
+function handleKrask2SelectionChange(event) {
+	const target = event.target;
+	if (!(target instanceof HTMLInputElement)) return;
+	if (target.dataset.krask2ItemSelect === '1') {
+		const kind = target.dataset.krask2SelectKind ?? '';
+		const key = target.dataset.krask2SelectionKey ?? '';
+		const index = Number.parseInt(target.dataset.krask2ItemIndex ?? '', 10);
+		toggleKrask2ItemSelection(kind, index, key, Boolean(target.checked), target);
+		return;
+	}
+	if (target.dataset.krask2EpisodeSelect === '1') {
+		const key = target.dataset.krask2SelectionKey ?? '';
+		const itemIndex = Number.parseInt(target.dataset.krask2ItemIndex ?? '', 10);
+		const episodeIndex = Number.parseInt(target.dataset.krask2EpisodeIndex ?? '', 10);
+		toggleKrask2EpisodeSelection(itemIndex, episodeIndex, key, Boolean(target.checked), target);
+		return;
+	}
+	if (target.dataset.krask2SeasonSelect === '1') {
+		const key = target.dataset.krask2SelectionKey ?? '';
+		const itemIndex = Number.parseInt(target.dataset.krask2ItemIndex ?? '', 10);
+		const rawSeason = target.dataset.krask2SeasonNumber ?? '';
+		const seasonNumber = rawSeason === 'null' || rawSeason === '' ? null : Number.parseInt(rawSeason, 10);
+		toggleKrask2SeasonSelection(itemIndex, seasonNumber, key, Boolean(target.checked), target);
+	}
+}
+
+function toggleKrask2ItemSelection(kind, itemIndex, key, checked, target) {
+	if (!key) return;
+	const item = state.krask2.items[itemIndex];
+	if (!item) {
+		target.checked = false;
+		return;
+	}
+	if (checked) {
+		let selection = null;
+		if (kind === 'series') {
+			selection = makeKrask2SeriesSelection(item);
+		} else if (kind === 'movie') {
+			selection = makeKrask2MovieSelection(item);
+		}
+		if (!selection) {
+			target.checked = false;
+			showToast('Unable to select this entry.', 'warning');
+			return;
+		}
+		state.krask2.selected.set(key, selection);
+	} else {
+		state.krask2.selected.delete(key);
+	}
+	updateKrask2QueueButton();
+}
+
+function toggleKrask2EpisodeSelection(itemIndex, episodeIndex, key, checked, target) {
+	if (!key) return;
+	const seriesItem = state.krask2.items[itemIndex];
+	if (!seriesItem) {
+		target.checked = false;
+		return;
+	}
+	const metaState = getKrask2MetaState(seriesItem.id);
+	const episode = metaState?.videos?.[episodeIndex];
+	if (!episode) {
+		target.checked = false;
+		return;
+	}
+	if (checked) {
+		const selection = makeKrask2EpisodeSelection(seriesItem, episode);
+		if (!selection) {
+			target.checked = false;
+			showToast('Episode is missing download metadata.', 'warning');
+			return;
+		}
+		state.krask2.selected.set(key, selection);
+	} else {
+		state.krask2.selected.delete(key);
+	}
+	updateKrask2QueueButton();
+}
+
+function toggleKrask2SeasonSelection(itemIndex, seasonNumber, key, checked, target) {
+	if (!key) return;
+	const seriesItem = state.krask2.items[itemIndex];
+	if (!seriesItem) {
+		target.checked = false;
+		return;
+	}
+	if (checked) {
+		const selection = makeKrask2SeasonSelection(seriesItem, seasonNumber);
+		if (!selection) {
+			target.checked = false;
+			showToast('Unable to select this season.', 'warning');
+			return;
+		}
+		state.krask2.selected.set(key, selection);
+	} else {
+		state.krask2.selected.delete(key);
+	}
+	updateKrask2QueueButton();
+}
+
+function makeKrask2MovieSelection(item) {
+	const key = buildKrask2SelectionKey('movie', item?.id ?? '', null);
+	if (!key || !item?.external_id) {
+		return null;
+	}
+	return {
+		key,
+		kind: 'movie',
+		item,
+		catalog: getActiveKrask2CatalogSummary(),
+	};
+}
+
+function makeKrask2SeriesSelection(item) {
+	const key = buildKrask2SelectionKey('series', item?.id ?? '', null);
+	if (!key) {
+		return null;
+	}
+	return {
+		key,
+		kind: 'series',
+		item,
+		catalog: getActiveKrask2CatalogSummary(),
+		seasonNumber: null,
+	};
+}
+
+function makeKrask2SeasonSelection(seriesItem, seasonNumber) {
+	const key = buildKrask2SelectionKey('season', seriesItem?.id ?? '', seasonNumber);
+	if (!key) {
+		return null;
+	}
+	return {
+		key,
+		kind: 'season',
+		seriesItem,
+		seasonNumber,
+		catalog: getActiveKrask2CatalogSummary(),
+	};
+}
+
+function makeKrask2EpisodeSelection(seriesItem, episode) {
+	const key = buildKrask2SelectionKey('episode', seriesItem?.id ?? '', episode?.id ?? '');
+	if (!key || !episode?.external_id) {
+		return null;
+	}
+	return {
+		key,
+		kind: 'episode',
+		seriesItem,
+		episode,
+		catalog: getActiveKrask2CatalogSummary(),
+	};
+}
+
+function getActiveKrask2CatalogSummary() {
+	return summarizeKrask2Catalog(getSelectedKrask2Catalog());
+}
+
+function buildKrask2SelectionKey(kind, subjectId, extra) {
+	const id = typeof subjectId === 'string' && subjectId !== '' ? subjectId : '';
+	if (id === '') {
+		return '';
+	}
+	switch (kind) {
+		case 'movie':
+			return `krask2:movie:${id}`;
+		case 'series':
+			return `krask2:series:${id}`;
+		case 'season': {
+			const seasonPart = extra === null || extra === undefined ? 'specials' : String(extra);
+			return `krask2:season:${id}:${seasonPart}`;
+		}
+		case 'episode': {
+			const episodeId = typeof extra === 'string' && extra !== '' ? extra : String(extra ?? '');
+			if (episodeId === '') {
+				return '';
+			}
+			return `krask2:episode:${id}:${episodeId}`;
+		}
+		default:
+			return '';
+	}
+}
+
+function isKrask2SelectionMarked(key) {
+	return Boolean(key && state.krask2.selected?.has(key));
+}
+
+function setKrask2QueueLabel(text) {
+	state.krask2.queueLabel = text;
+	updateKrask2QueueButton();
+}
+
+function estimateKrask2SelectionSize() {
+	let total = 0;
+	state.krask2.selected?.forEach((entry) => {
+		if ((entry.kind === 'series' || entry.kind === 'season') && Number.isFinite(entry.episodeCount)) {
+			total += Number(entry.episodeCount);
+		} else {
+			total++;
+		}
+	});
+	return total;
+}
+
+function updateKrask2QueueButton() {
+	if (!els.krask2QueueBtn) return;
+	const selectionCount = state.krask2.selected?.size ?? 0;
+	const labelOverride = state.krask2.queueLabel ?? '';
+	if (selectionCount === 0 && labelOverride === '') {
+		toggleElement(els.krask2QueueBtn, false);
+		return;
+	}
+	toggleElement(els.krask2QueueBtn, true, 'inline-flex');
+	if (labelOverride) {
+		els.krask2QueueBtn.textContent = labelOverride;
+	} else {
+		const estimate = estimateKrask2SelectionSize();
+		const countLabel = estimate > 0 ? estimate : selectionCount;
+		const plural = countLabel === 1 ? '' : 's';
+		els.krask2QueueBtn.textContent = `Add ${countLabel} item${plural} to queue`;
+	}
+	if (state.isQueueSubmitting) {
+		els.krask2QueueBtn.setAttribute('disabled', 'true');
+	} else {
+		els.krask2QueueBtn.removeAttribute('disabled');
+	}
+}
+
+async function queueSelectedKrask2() {
+	if (!state.user) {
+		showToast('Please sign in first.', 'warning');
+		return;
+	}
+	if (state.isQueueSubmitting || (state.krask2.selected?.size ?? 0) === 0) {
+		return;
+	}
+	state.isQueueSubmitting = true;
+	setKrask2QueueLabel('Preparing selection…');
+	const selections = Array.from(state.krask2.selected.values());
+	const candidates = [];
+	const dedupe = new Set();
+
+	try {
+		let processed = 0;
+		for (const entry of selections) {
+			processed++;
+			setKrask2QueueLabel(`Preparing ${processed}/${selections.length}…`);
+			try {
+				const expanded = await expandKrask2SelectionEntry(entry);
+				expanded.forEach((candidate) => {
+					const uniqueKey = candidate.uniqueKey ?? candidate.externalId;
+					if (!uniqueKey || dedupe.has(uniqueKey)) {
+						return;
+					}
+					dedupe.add(uniqueKey);
+					candidates.push(candidate);
+				});
+			} catch (error) {
+				console.warn('Failed to expand KraSk2 selection', error);
+			}
+		}
+
+		if (candidates.length === 0) {
+			showToast('Nothing to queue.', 'warning');
+			return;
+		}
+
+		const queueItems = [];
+		const variantCache = new Map();
+		let resolved = 0;
+
+		for (const candidate of candidates) {
+			resolved++;
+			setKrask2QueueLabel(`Resolving ${resolved}/${candidates.length}…`);
+			try {
+				if (!candidate.externalId) {
+					throw new Error('Missing download identifier for selection.');
+				}
+				let variants = variantCache.get(candidate.externalId);
+				if (!variants) {
+					variants = await fetchKrask2Variants(candidate.externalId);
+					variantCache.set(candidate.externalId, variants);
+				}
+				const preferred = pickPreferredKrask2Variant(variants);
+				if (!preferred) {
+					continue;
+				}
+				const context = buildKrask2DownloadContext({
+					sourceItem: candidate.sourceItem,
+					parentItem: candidate.parentItem ?? null,
+					catalog: candidate.catalog ?? null,
+					label: candidate.label,
+					externalId: candidate.externalId,
+				});
+				const payload = buildQueuePayloadFromVariant(context, preferred);
+				if (payload) {
+					queueItems.push(payload);
+				}
+			} catch (error) {
+				showToast(messageFromError(error), 'warning');
+			}
+		}
+
+		if (queueItems.length === 0) {
+			showToast('Unable to resolve streams for the selected entries.', 'error');
+			return;
+		}
+
+		await fetchJson(API.queue, {
+			method: 'POST',
+			body: JSON.stringify({ items: queueItems }),
+		});
+		showToast(`Queued ${queueItems.length} item${queueItems.length === 1 ? '' : 's'}.`, 'success');
+		state.krask2.selected = new Map();
+		state.krask2.queueLabel = '';
+		renderKrask2View();
+		if (state.currentView === 'queue') {
+			loadJobs();
+		}
+	} catch (error) {
+		showToast(messageFromError(error), 'error');
+	} finally {
+		state.isQueueSubmitting = false;
+		state.krask2.queueLabel = '';
+		updateKrask2QueueButton();
+	}
+}
+
+async function expandKrask2SelectionEntry(entry) {
+	if (!entry || typeof entry !== 'object') {
+		return [];
+	}
+	const catalog = entry.catalog ?? getActiveKrask2CatalogSummary();
+	if (entry.kind === 'movie' && entry.item) {
+		return [buildKrask2CandidateFromItem(entry.item, catalog)];
+	}
+	if (entry.kind === 'episode' && entry.episode && entry.seriesItem) {
+		return [buildKrask2CandidateFromEpisode(entry.episode, entry.seriesItem, catalog)];
+	}
+	if (entry.kind === 'series' && entry.item) {
+		const episodes = await fetchAllEpisodesForSeries(entry.item);
+		entry.episodeCount = episodes.length;
+		return episodes.map((episode) => buildKrask2CandidateFromEpisode(episode, entry.item, catalog));
+	}
+	if (entry.kind === 'season' && entry.seriesItem) {
+		const episodes = await fetchAllEpisodesForSeries(entry.seriesItem);
+		const filtered = episodes.filter((episode) => {
+			const season = Number.isFinite(episode?.season) ? Number(episode.season) : null;
+			return season === (entry.seasonNumber ?? null);
+		});
+		entry.episodeCount = filtered.length;
+		return filtered.map((episode) => buildKrask2CandidateFromEpisode(episode, entry.seriesItem, catalog));
+	}
+	return [];
+}
+
+async function fetchAllEpisodesForSeries(seriesItem) {
+	const metaState = getKrask2MetaState(seriesItem.id, true);
+	if (metaState && Array.isArray(metaState.videos) && metaState.videos.length > 0) {
+		return metaState.videos;
+	}
+	const { videos } = await fetchKrask2EpisodesPayload(seriesItem, { force: false });
+	if (metaState) {
+		metaState.videos = videos;
+		state.krask2.meta[seriesItem.id] = metaState;
+	}
+	return videos;
+}
+
+function buildKrask2CandidateFromItem(item, catalog) {
+	return {
+		uniqueKey: `krask2:movie:${item.id}`,
+		externalId: item.external_id ?? item.externalId ?? null,
+		label: item.title ?? item.label ?? 'Kra.sk item',
+		sourceItem: item,
+		parentItem: null,
+		catalog,
+	};
+}
+
+function buildKrask2CandidateFromEpisode(episode, seriesItem, catalog) {
+	return {
+		uniqueKey: `krask2:episode:${seriesItem.id}:${episode.id}`,
+		externalId: episode.external_id ?? episode.externalId ?? null,
+		label: episode.label ?? buildKrask2EpisodeLabel(episode),
+		sourceItem: episode,
+		parentItem: seriesItem,
+		catalog,
+	};
+}
+
+function buildKrask2DownloadContext({ sourceItem, parentItem = null, catalog, label, externalId }) {
+	const resolvedLabel = label ?? sourceItem?.title ?? sourceItem?.label ?? 'Kra.sk item';
+	return {
+		label: resolvedLabel,
+		title: resolvedLabel,
+		externalId: externalId ?? sourceItem?.external_id ?? sourceItem?.externalId ?? null,
+		contextType: 'krask2',
+		provider: 'krask2',
+		sourceItem,
+		sourceParent: parentItem,
+		catalog,
+	};
+}
+
+async function fetchKrask2Variants(externalId) {
+	const params = new URLSearchParams({ external_id: externalId });
+	const response = await fetchJson(`${API.krask2Options}?${params.toString()}`);
+	return normalizeKraskaVariants(response?.data ?? []);
+}
+
+function pickPreferredKrask2Variant(variants) {
+	if (!Array.isArray(variants) || variants.length === 0) {
+		return null;
+	}
+	const sorted = [...variants].sort((a, b) => {
+		const sizeA = Number(a?.size_bytes ?? 0);
+		const sizeB = Number(b?.size_bytes ?? 0);
+		if (sizeA !== sizeB) {
+			return sizeB - sizeA;
+		}
+		const bitrateA = Number(a?.bitrate_kbps ?? 0);
+		const bitrateB = Number(b?.bitrate_kbps ?? 0);
+		if (bitrateA !== bitrateB) {
+			return bitrateB - bitrateA;
+		}
+		return 0;
+	});
+	return sorted[0];
+}
+
+function buildQueuePayloadFromVariant(context, variant) {
+	const provider = context?.provider ?? 'kraska';
+	const targetIdent = typeof variant?.kra_ident === 'string' && variant.kra_ident !== ''
+		? variant.kra_ident
+		: typeof variant?.id === 'string' && variant.id !== ''
+			? variant.id
+			: context?.externalId ?? null;
+	if (!targetIdent) {
+		throw new Error('Missing download identifier for selected option.');
+	}
+	const titleParts = [context?.label ?? context?.title ?? 'Kra.sk item'];
+	if (variant?.title) {
+		titleParts.push(variant.title);
+	} else if (variant?.quality) {
+		titleParts.push(variant.quality);
+	}
+	const payload = {
+		provider,
+		external_id: targetIdent,
+		title: titleParts.filter(Boolean).join(' • '),
+	};
+	if (provider === 'krask2') {
+		const metadata = buildKrask2JobMetadata(context, variant);
+		if (metadata) {
+			payload.metadata = metadata;
+		}
+	}
+	return payload;
+}
+
+function openKrask2EpisodeOptions(itemIndex, episodeIndex) {
+	const item = state.krask2.items[itemIndex];
+	if (!item) return;
+	const metaState = getKrask2MetaState(item.id);
+	const episode = metaState?.videos?.[episodeIndex];
+	if (!episode || !episode.external_id) {
+		showToast('Episode is missing download options.', 'warning');
+		return;
+	}
+	const label = episode.label ?? `${item.title} • ${buildKrask2EpisodeLabel(episode)}`;
+	openKraskaOptionsModal({
+		label,
+		title: label,
+		external_id: episode.external_id,
+		provider: 'krask2',
+		contextType: 'krask2',
+		sourceItem: episode,
+		sourceParent: item,
+		catalog: summarizeKrask2Catalog(getSelectedKrask2Catalog()),
+	});
 }
 
 function normalizeKraskaPath(value) {

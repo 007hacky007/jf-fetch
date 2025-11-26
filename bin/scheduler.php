@@ -14,6 +14,7 @@ use App\Providers\WebshareProvider;
 use App\Providers\RateLimitDeferredException;
 use App\Providers\KraSkApiException;
 use App\Providers\KraSkProvider;
+use App\Providers\KraSk2Provider;
 use App\Providers\ProviderBackoffException;
 use App\Support\Clock;
 use App\Support\LogRotation;
@@ -523,7 +524,8 @@ function buildProvider(array $providerRow): VideoProvider
 
 	$provider = match ($key) {
 		'webshare' => new WebshareProvider($config),
-		'kraska' => new App\Providers\KraSkProvider($config),
+		'kraska' => new KraSkProvider($config),
+		'krask2' => new KraSk2Provider($config),
 		default => throw new RuntimeException('Unsupported provider: ' . $key),
 	};
 
