@@ -145,6 +145,12 @@ Stream-Cinema detail endpoints used to derive Kra.sk `ident` values are rate lim
 
 Lowering the interval below upstream limits risks throttling; increase it if you observe 429/too many requests errors.
 
+### KraSk2 download spacing
+
+Bulk KraSk2 queueing now respects a configurable delay between download starts to avoid hammering upstream manifests. Configure the spacing (default `120` seconds) via `config/app.ini` under `[providers]` → `krask2_download_spacing_seconds`. Administrators can override the value at runtime through the Settings table if needed. When the scheduler encounters a KraSk2 job before the interval elapses it defers the job (and any other KraSk2 work) until the remaining delay passes; other providers remain unaffected.
+
+Season/series bulk selections are submitted as background tasks: the browser now sends only the episode tokens and disconnects. A server-side resolver expands each token into concrete streams, honors the provider rate limits, and inserts real download jobs even if the original UI session is long gone.
+
 ### Jellyfin integration
 
 Provide your Jellyfin **Server URL** and **API key** in the Settings tab to enable automatic library refreshes after a download completes or a previously completed file is deleted. For faster, scoped scans you can optionally set a **Library ID** (Virtual Folder ID). Use the "Fetch libraries" button to query `/Library/VirtualFolders` and select from the available libraries; the selected ID is stored in `jellyfin.library_id`.

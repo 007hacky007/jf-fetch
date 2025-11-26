@@ -3,12 +3,17 @@
 declare(strict_types=1);
 
 use App\Download\Aria2Client;
+use App\Domain\JobQueueWriter;
+use App\Domain\Jobs;
+use App\Domain\KraSk2BulkQueue;
 use App\Infra\Audit;
 use App\Infra\Config;
 use App\Infra\Db;
 use App\Infra\ProviderBackoff;
+use App\Infra\ProviderRateLimiter;
 use App\Infra\ProviderPause;
 use App\Infra\ProviderSecrets;
+use App\Infra\Events;
 use App\Providers\VideoProvider;
 use App\Providers\WebshareProvider;
 use App\Providers\RateLimitDeferredException;
@@ -18,6 +23,7 @@ use App\Providers\KraSk2Provider;
 use App\Providers\ProviderBackoffException;
 use App\Support\Clock;
 use App\Support\LogRotation;
+use PDO;
 
 /**
  * Scheduler loop: selects queued jobs and enqueues them to aria2 while
@@ -105,6 +111,7 @@ function runSchedulerLoop(string $root): void
 		try {
 			Config::reloadOverrides();
 			synchronizeProviderBackoff($providerThrottleUntil);
+			processKrask2BulkQueue();
 
 			// Requeue orphan 'starting' jobs that never obtained an aria2_gid (e.g. provider init exception earlier)
 			$requeued = cleanupOrphanStartingJobs();
@@ -286,6 +293,10 @@ function claimNextJob(array $skipProviderIds = []): ?array
 function processJob(array $job, array $providerRow, Aria2Client $aria2): void
 {
 	$providerKey = isset($providerRow['key']) ? (string) $providerRow['key'] : '';
+
+	if ($providerKey === 'krask2') {
+		enforceKrask2DownloadSpacing($job);
+	}
 	try {
 		$provider = buildProvider($providerRow);
 		$resolved = $provider->resolveDownloadUrl((string) $job['external_id']);
@@ -398,6 +409,185 @@ function processJob(array $job, array $providerRow, Aria2Client $aria2): void
 
 		failJob((int) $job['id'], 'Failed to enqueue job: ' . $exception->getMessage(), $job, $details);
 	}
+}
+
+function processKrask2BulkQueue(): void
+{
+	try {
+		$task = KraSk2BulkQueue::claimPending();
+		if ($task === null) {
+			return;
+		}
+
+		$taskId = (int) $task['id'];
+		$userId = (int) $task['user_id'];
+		$counters = ['processed' => 0, 'failed' => 0];
+
+		$user = fetchUserById($userId);
+		if ($user === null) {
+			KraSk2BulkQueue::markFailed($taskId, 0, (int) ($task['total_items'] ?? 0), 'User missing for task.');
+			return;
+		}
+
+		$providerRow = fetchProviderByKey('krask2');
+		if ($providerRow === null || (int) $providerRow['enabled'] !== 1) {
+			KraSk2BulkQueue::markFailed($taskId, 0, (int) ($task['total_items'] ?? 0), 'KraSk2 provider unavailable.');
+			return;
+		}
+
+		$payload = KraSk2BulkQueue::decodePayload($task);
+		$items = is_array($payload['items']) ? $payload['items'] : [];
+		if ($items === []) {
+			KraSk2BulkQueue::markCompleted($taskId, 0, 0);
+			return;
+		}
+
+		$provider = buildProvider($providerRow);
+		if (!$provider instanceof KraSk2Provider) {
+			KraSk2BulkQueue::markFailed($taskId, 0, (int) ($task['total_items'] ?? 0), 'Configured provider is not KraSk2.');
+			return;
+		}
+		$providersMap = ['krask2' => $providerRow];
+
+		foreach ($items as $item) {
+			try {
+				$externalId = isset($item['external_id']) ? trim((string) $item['external_id']) : '';
+				if ($externalId === '') {
+					throw new RuntimeException('Missing external identifier.');
+				}
+
+				$variants = $provider->listDownloadOptions($externalId);
+				$preferred = selectPreferredKrask2Variant($variants);
+				if ($preferred === null || !isset($preferred['id'])) {
+					throw new RuntimeException('No downloadable variants available.');
+				}
+
+				$jobPayload = [
+					[
+						'provider' => 'krask2',
+						'external_id' => (string) $preferred['id'],
+						'title' => isset($item['title']) && trim((string) $item['title']) !== ''
+							? trim((string) $item['title'])
+							: (string) ($preferred['title'] ?? 'KraSk2 stream'),
+						'metadata' => $item['metadata'] ?? null,
+						'category' => $item['category'] ?? null,
+					],
+				];
+
+				$jobIds = JobQueueWriter::insertJobs($jobPayload, $user, $providersMap, null);
+				foreach ($jobIds as $jobId) {
+					$jobRow = Jobs::fetchById($jobId);
+					if ($jobRow !== null) {
+						Audit::record($userId, 'job.queued', 'job', $jobId, [
+							'provider_id' => (int) $jobRow['provider_id'],
+							'title' => $jobRow['title'] ?? null,
+							'category' => $jobRow['category'] ?? null,
+						]);
+						Events::notify($userId, $jobId, 'job.queued', [
+							'title' => $jobRow['title'] ?? null,
+						]);
+					}
+				}
+
+				$counters['processed']++;
+			} catch (Throwable $exception) {
+				$counters['failed']++;
+				continue;
+			}
+		}
+
+		if ($counters['processed'] > 0 || $counters['failed'] > 0) {
+			KraSk2BulkQueue::markCompleted($taskId, $counters['processed'], $counters['failed']);
+		} else {
+			KraSk2BulkQueue::markCompleted($taskId, 0, 0);
+		}
+	} catch (Throwable $exception) {
+		if (isset($taskId)) {
+			KraSk2BulkQueue::markFailed($taskId, $counters['processed'] ?? 0, $counters['failed'] ?? 0, $exception->getMessage());
+		}
+		logError('KraSk2 bulk queue processing failed: ' . $exception->getMessage());
+	}
+}
+
+function enforceKrask2DownloadSpacing(array $job): void
+{
+	$spacingSeconds = getKrask2DownloadSpacingSeconds();
+	if ($spacingSeconds <= 0) {
+		return;
+	}
+
+	$retryAfter = ProviderRateLimiter::acquire(
+		'krask2',
+		'download',
+		$spacingSeconds,
+		[
+			'job_id' => (int) ($job['id'] ?? 0),
+			'title' => $job['title'] ?? null,
+		]
+	);
+	if ($retryAfter === null) {
+		return;
+	}
+
+	$remaining = max(1, $retryAfter);
+	throw new RateLimitDeferredException(
+		$remaining,
+		sprintf('KraSk2 download deferred to respect %d second spacing.', $spacingSeconds)
+	);
+}
+
+function getKrask2DownloadSpacingSeconds(): int
+{
+	try {
+		$value = (int) Config::get('providers.krask2_download_spacing_seconds');
+	} catch (Throwable) {
+		$value = 0;
+	}
+
+	if ($value <= 0) {
+		return 0;
+	}
+
+	return min($value, 86400);
+}
+
+function selectPreferredKrask2Variant(array $variants): ?array
+{
+	if ($variants === []) {
+		return null;
+	}
+
+	usort($variants, static function (array $a, array $b): int {
+		$sizeA = isset($a['size_bytes']) ? (int) $a['size_bytes'] : 0;
+		$sizeB = isset($b['size_bytes']) ? (int) $b['size_bytes'] : 0;
+		if ($sizeA !== $sizeB) {
+			return $sizeB <=> $sizeA;
+		}
+		$bitrateA = isset($a['bitrate_kbps']) ? (int) $a['bitrate_kbps'] : 0;
+		$bitrateB = isset($b['bitrate_kbps']) ? (int) $b['bitrate_kbps'] : 0;
+		if ($bitrateA !== $bitrateB) {
+			return $bitrateB <=> $bitrateA;
+		}
+		return 0;
+	});
+
+	return $variants[0];
+}
+
+function fetchUserById(int $userId): ?array
+{
+	$statement = Db::run('SELECT id, name, email FROM users WHERE id = :id LIMIT 1', ['id' => $userId]);
+	$row = $statement->fetch(PDO::FETCH_ASSOC);
+
+	return $row !== false ? $row : null;
+}
+
+function fetchProviderByKey(string $providerKey): ?array
+{
+	$statement = Db::run('SELECT * FROM providers WHERE key = :key LIMIT 1', ['key' => $providerKey]);
+	$row = $statement->fetch(PDO::FETCH_ASSOC);
+
+	return $row !== false ? $row : null;
 }
 
 /**

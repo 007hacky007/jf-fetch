@@ -94,6 +94,7 @@ function buildSettingsResponse(): array
 			'kraska_menu_cache_ttl_seconds' => (int) Config::get('providers.kraska_menu_cache_ttl_seconds'),
 			'kraska_debug_enabled' => (bool) Config::get('providers.kraska_debug_enabled'),
 			'kraska_error_backoff_seconds' => (int) Config::get('providers.kraska_error_backoff_seconds'),
+			'krask2_download_spacing_seconds' => (int) Config::get('providers.krask2_download_spacing_seconds'),
 		],
 	];
 }
@@ -113,6 +114,7 @@ function validateSettingsPayload(array $payload): array
 		'providers.kraska_menu_cache_ttl_seconds' => ['section' => 'providers', 'field' => 'kraska_menu_cache_ttl_seconds', 'type' => 'int', 'min' => 0, 'max' => 31536000],
 		'providers.kraska_debug_enabled' => ['section' => 'providers', 'field' => 'kraska_debug_enabled', 'type' => 'bool', 'required' => false],
 		'providers.kraska_error_backoff_seconds' => ['section' => 'providers', 'field' => 'kraska_error_backoff_seconds', 'type' => 'int', 'min' => 60, 'max' => 86400],
+		'providers.krask2_download_spacing_seconds' => ['section' => 'providers', 'field' => 'krask2_download_spacing_seconds', 'type' => 'int', 'min' => 0, 'max' => 86400],
 		'paths.downloads' => ['section' => 'paths', 'field' => 'downloads', 'type' => 'string', 'required' => true],
 		'paths.library' => ['section' => 'paths', 'field' => 'library', 'type' => 'string', 'required' => true],
 		'jellyfin.url' => ['section' => 'jellyfin', 'field' => 'url', 'type' => 'string', 'required' => false],
@@ -201,6 +203,18 @@ function validateSettingsPayload(array $payload): array
 				$value = filter_var($rawValue, FILTER_VALIDATE_INT, ['options' => ['min_range' => $min]]);
 				if ($value === false || (int) $value > $max) {
 					$errors[$key] = sprintf('Kra.sk error backoff must be between %d and %d seconds.', $min, $max);
+					break;
+				}
+
+				$normalized[$key] = (int) $value;
+				break;
+
+			case 'providers.krask2_download_spacing_seconds':
+				$min = (int) ($definition['min'] ?? 0);
+				$max = (int) ($definition['max'] ?? 86400);
+				$value = filter_var($rawValue, FILTER_VALIDATE_INT, ['options' => ['min_range' => $min]]);
+				if ($value === false || (int) $value > $max) {
+					$errors[$key] = sprintf('KraSk2 download spacing must be between %d and %d seconds.', $min, $max);
 					break;
 				}
 

@@ -648,6 +648,15 @@ async function saveSettings() {
 		}
 	}
 
+	const krask2SpacingRaw = (els.settingsKrask2SpacingSeconds?.value ?? '').trim();
+	let krask2SpacingSeconds = null;
+	if (krask2SpacingRaw !== '') {
+		const parsedSpacing = Number.parseInt(krask2SpacingRaw, 10);
+		if (!Number.isNaN(parsedSpacing)) {
+			krask2SpacingSeconds = Math.max(0, parsedSpacing);
+		}
+	}
+
 	const kraskaDebugEnabled = els.settingsKraskaDebugEnabled?.checked ?? false;
 
 	const payload = {
@@ -670,6 +679,7 @@ async function saveSettings() {
 			kraska_menu_cache_ttl_seconds: kraskaTtlSeconds,
 			kraska_debug_enabled: kraskaDebugEnabled,
 			kraska_error_backoff_seconds: kraskaBackoffSeconds,
+			krask2_download_spacing_seconds: krask2SpacingSeconds,
 		},
 	};
 
@@ -728,6 +738,7 @@ function renderSettings() {
 		els.settingsDefaultSearchLimit,
 		els.settingsKraskaMenuCacheTtl,
 		els.settingsKraskaBackoffMinutes,
+		els.settingsKrask2SpacingSeconds,
 		els.settingsKraskaDebugEnabled,
 		els.settingsDownloadsPath,
 		els.settingsLibraryPath,
@@ -780,6 +791,14 @@ function renderSettings() {
 				const minutes = backoffSeconds / 60;
 				const roundedMinutes = Math.round(minutes * 10) / 10;
 				els.settingsKraskaBackoffMinutes.value = Number.isFinite(roundedMinutes) ? String(roundedMinutes) : '';
+			}
+		}
+		if (els.settingsKrask2SpacingSeconds) {
+			const spacingSeconds = settings?.providers?.krask2_download_spacing_seconds;
+			if (spacingSeconds === null || spacingSeconds === undefined) {
+				els.settingsKrask2SpacingSeconds.value = '';
+			} else {
+				els.settingsKrask2SpacingSeconds.value = String(spacingSeconds);
 			}
 		}
 		if (els.settingsKraskaDebugEnabled) {
@@ -3766,52 +3785,44 @@ async function queueSelectedKrask2() {
 			return;
 		}
 
-		const queueItems = [];
-		const variantCache = new Map();
-		let resolved = 0;
-
+		const payloadItems = [];
+		let prepared = 0;
 		for (const candidate of candidates) {
-			resolved++;
-			setKrask2QueueLabel(`Resolving ${resolved}/${candidates.length}…`);
-			try {
-				if (!candidate.externalId) {
-					throw new Error('Missing download identifier for selection.');
-				}
-				let variants = variantCache.get(candidate.externalId);
-				if (!variants) {
-					variants = await fetchKrask2Variants(candidate.externalId);
-					variantCache.set(candidate.externalId, variants);
-				}
-				const preferred = pickPreferredKrask2Variant(variants);
-				if (!preferred) {
-					continue;
-				}
-				const context = buildKrask2DownloadContext({
-					sourceItem: candidate.sourceItem,
-					parentItem: candidate.parentItem ?? null,
-					catalog: candidate.catalog ?? null,
-					label: candidate.label,
-					externalId: candidate.externalId,
-				});
-				const payload = buildQueuePayloadFromVariant(context, preferred);
-				if (payload) {
-					queueItems.push(payload);
-				}
-			} catch (error) {
-				showToast(messageFromError(error), 'warning');
+			prepared++;
+			setKrask2QueueLabel(`Handing off ${prepared}/${candidates.length}…`);
+			if (!candidate.externalId) {
+				continue;
 			}
+			const context = buildKrask2DownloadContext({
+				sourceItem: candidate.sourceItem,
+				parentItem: candidate.parentItem ?? null,
+				catalog: candidate.catalog ?? null,
+				label: candidate.label,
+				externalId: candidate.externalId,
+			});
+			const metadata = buildKrask2JobMetadata(context, null);
+			const itemPayload = {
+				provider: 'krask2',
+				external_id: candidate.externalId,
+				title: context.label ?? candidate.label ?? 'KraSk2 item',
+			};
+			if (metadata) {
+				itemPayload.metadata = metadata;
+			}
+			payloadItems.push(itemPayload);
 		}
 
-		if (queueItems.length === 0) {
-			showToast('Unable to resolve streams for the selected entries.', 'error');
+		if (payloadItems.length === 0) {
+			showToast('Unable to prepare the selected entries.', 'error');
 			return;
 		}
 
-		await fetchJson(API.queue, {
+		setKrask2QueueLabel('Submitting to server…');
+		await fetchJson(API.krask2BulkQueue, {
 			method: 'POST',
-			body: JSON.stringify({ items: queueItems }),
+			body: JSON.stringify({ items: payloadItems }),
 		});
-		showToast(`Queued ${queueItems.length} item${queueItems.length === 1 ? '' : 's'}.`, 'success');
+		showToast(`Background resolver accepted ${payloadItems.length} item${payloadItems.length === 1 ? '' : 's'}.`, 'success');
 		state.krask2.selected = new Map();
 		state.krask2.queueLabel = '';
 		renderKrask2View();

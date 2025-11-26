@@ -176,6 +176,11 @@ audit_log(id, user_id, action, subject_type, subject_id, payload_json, created_a
   user = ""
   pass = ""
 
+  [providers]
+  kraska_menu_cache_ttl_seconds = 604800
+  kraska_debug_enabled = false
+  krask2_download_spacing_seconds = 120
+
   [webshare]
   wst = "CHANGEME"
   ```
@@ -202,7 +207,7 @@ audit_log(id, user_id, action, subject_type, subject_id, payload_json, created_a
   * In compose, you can use `platform: linux/amd64` only if a dependency lacks arm64.
 * **Ports:** expose `80` (nginx). `6800` (aria2 RPC) only if you need external RPC.
 
-**Dockerfile (sketch)**
+### Dockerfile (sketch)
 
 ```dockerfile
 FROM php:8.3-fpm-bookworm
@@ -232,7 +237,7 @@ EXPOSE 80 6800
 CMD ["/usr/bin/supervisord","-n"]
 ```
 
-**supervisord.conf (sketch)**
+### supervisord.conf (sketch)
 
 ```ini
 [supervisord]
@@ -265,7 +270,7 @@ autostart=true
 priority=50
 ```
 
-**docker-compose.yml (single service)**
+### docker-compose.yml (single service)
 
 ```yaml
 version: "3.9"
@@ -291,7 +296,7 @@ services:
 
 ## 11) Project Structure
 
-```
+```text
 repo/
   public/
     index.php
