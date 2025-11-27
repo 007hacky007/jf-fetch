@@ -5,6 +5,7 @@
 export const state = {
 	user: null,
 	providers: [],
+	providersLoaded: false,
 	users: [],
 	searchResults: [],
 	selectedSearch: new Set(),
@@ -29,6 +30,7 @@ export const state = {
 	jobStreamConnectedAt: null, // timestamp (ms) when current SSE connection opened
 	jobStreamVisibleIds: new Set(),
 	jobStreamVisibleKey: '',
+	jobStreamReloadTimeout: null,
 	defaultSearchLimit: 50,
 	currentView: 'search',
 	// Paging metadata for jobs list (server-side infinite scroll)
@@ -157,6 +159,7 @@ export const els = {
 	settingsMaxDownloads: document.getElementById('settings-max-downloads'),
 	settingsMinFreeSpace: document.getElementById('settings-min-free-space'),
 	settingsDefaultSearchLimit: document.getElementById('settings-default-search-limit'),
+	settingsAria2MaxSpeed: document.getElementById('settings-aria2-max-speed'),
 	settingsKraskaMenuCacheTtl: document.getElementById('settings-kraska-menu-cache-ttl'),
 	settingsKraskaBackoffMinutes: document.getElementById('settings-kraska-backoff-minutes'),
 	settingsKrask2SpacingSeconds: document.getElementById('settings-krask2-spacing-seconds'),

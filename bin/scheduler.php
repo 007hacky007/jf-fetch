@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use App\Download\Aria2Client;
+use App\Download\Aria2Options;
 use App\Domain\JobQueueWriter;
 use App\Domain\Jobs;
 use App\Domain\KraSk2BulkQueue;
@@ -23,7 +24,6 @@ use App\Providers\KraSk2Provider;
 use App\Providers\ProviderBackoffException;
 use App\Support\Clock;
 use App\Support\LogRotation;
-use PDO;
 
 /**
  * Scheduler loop: selects queued jobs and enqueues them to aria2 while
@@ -318,6 +318,8 @@ function processJob(array $job, array $providerRow, Aria2Client $aria2): void
 		$firstUri = $uris[0];
 		$options['out'] = deriveOutputFilename((string) ($job['title'] ?? 'download'), $firstUri);
 
+		$options = Aria2Options::applySpeedLimit($options);
+
 		$gid = $aria2->addUri($uris, $options);
 
 		Db::run(
@@ -558,20 +560,252 @@ function selectPreferredKrask2Variant(array $variants): ?array
 	}
 
 	usort($variants, static function (array $a, array $b): int {
-		$sizeA = isset($a['size_bytes']) ? (int) $a['size_bytes'] : 0;
-		$sizeB = isset($b['size_bytes']) ? (int) $b['size_bytes'] : 0;
-		if ($sizeA !== $sizeB) {
-			return $sizeB <=> $sizeA;
-		}
-		$bitrateA = isset($a['bitrate_kbps']) ? (int) $a['bitrate_kbps'] : 0;
-		$bitrateB = isset($b['bitrate_kbps']) ? (int) $b['bitrate_kbps'] : 0;
-		if ($bitrateA !== $bitrateB) {
-			return $bitrateB <=> $bitrateA;
-		}
-		return 0;
+		return compareKrask2Variants($a, $b);
 	});
 
 	return $variants[0];
+}
+
+function compareKrask2Variants(array $a, array $b): int
+{
+	$czA = variantHasCzechAudio($a);
+	$czB = variantHasCzechAudio($b);
+	if ($czA !== $czB) {
+		return $czB <=> $czA;
+	}
+
+	$resA = detectVariantResolutionRank($a);
+	$resB = detectVariantResolutionRank($b);
+	if ($resA !== $resB) {
+		return $resB <=> $resA;
+	}
+
+	if ($czA && $czB) {
+		$langCountA = count(extractVariantLanguageCodes($a));
+		$langCountB = count(extractVariantLanguageCodes($b));
+		if ($langCountA !== $langCountB) {
+			return $langCountB <=> $langCountA;
+		}
+	}
+
+	$sizeA = isset($a['size_bytes']) ? (int) $a['size_bytes'] : 0;
+	$sizeB = isset($b['size_bytes']) ? (int) $b['size_bytes'] : 0;
+	if ($sizeA !== $sizeB) {
+		return $sizeB <=> $sizeA;
+	}
+
+	$bitrateA = isset($a['bitrate_kbps']) ? (int) $a['bitrate_kbps'] : 0;
+	$bitrateB = isset($b['bitrate_kbps']) ? (int) $b['bitrate_kbps'] : 0;
+	if ($bitrateA !== $bitrateB) {
+		return $bitrateB <=> $bitrateA;
+	}
+
+	return 0;
+}
+
+function variantHasCzechAudio(array $variant): bool
+{
+	foreach (extractVariantLanguageCodes($variant) as $code) {
+		if ($code === 'CZ') {
+			return true;
+		}
+	}
+
+	return false;
+}
+
+/**
+ * @return array<int, string>
+ */
+function extractVariantLanguageCodes(array $variant): array
+{
+	$texts = [];
+	foreach (['language', 'description', 'title', 'quality'] as $key) {
+		if (isset($variant[$key]) && is_string($variant[$key]) && $variant[$key] !== '') {
+			$texts[] = $variant[$key];
+		}
+	}
+
+	$source = $variant['source'] ?? null;
+	if (is_array($source) && isset($source['stream']) && is_array($source['stream'])) {
+		$stream = $source['stream'];
+		foreach (['language', 'lang', 'description', 'title'] as $key) {
+			if (isset($stream[$key]) && is_string($stream[$key]) && $stream[$key] !== '') {
+				$texts[] = $stream[$key];
+			}
+		}
+		if (isset($stream['languages']) && is_array($stream['languages'])) {
+			foreach ($stream['languages'] as $language) {
+				if (is_string($language) && $language !== '') {
+					$texts[] = $language;
+				}
+			}
+		}
+	}
+
+	$codes = [];
+	foreach ($texts as $text) {
+		foreach (extractLanguageTokensFromText($text) as $code) {
+			$codes[$code] = true;
+		}
+	}
+
+	return array_keys($codes);
+}
+
+/**
+ * @return array<int, string>
+ */
+function extractLanguageTokensFromText(string $text): array
+{
+	$upper = strtoupper($text);
+	if ($upper === '') {
+		return [];
+	}
+
+	if (!preg_match_all('/\b([A-Z]{2,3})\b/u', $upper, $matches)) {
+		return [];
+	}
+
+	$tokens = [];
+	foreach ($matches[1] as $candidate) {
+		$normalized = normalizeLanguageToken($candidate);
+		if ($normalized !== null) {
+			$tokens[$normalized] = true;
+		}
+	}
+
+	return array_keys($tokens);
+}
+
+function normalizeLanguageToken(string $token): ?string
+{
+	static $map = null;
+	if ($map === null) {
+		$map = [
+			'CZ' => 'CZ',
+			'CS' => 'CZ',
+			'CZE' => 'CZ',
+			'CES' => 'CZ',
+			'SK' => 'SK',
+			'SVK' => 'SK',
+			'EN' => 'EN',
+			'ENG' => 'EN',
+			'US' => 'EN',
+			'PL' => 'PL',
+			'POL' => 'PL',
+			'DE' => 'DE',
+			'GER' => 'DE',
+			'DEU' => 'DE',
+			'FR' => 'FR',
+			'FRA' => 'FR',
+			'FRE' => 'FR',
+			'ES' => 'ES',
+			'SPA' => 'ES',
+			'ITA' => 'IT',
+			'IT' => 'IT',
+			'HU' => 'HU',
+			'HUN' => 'HU',
+			'RU' => 'RU',
+			'RUS' => 'RU',
+			'RO' => 'RO',
+			'RON' => 'RO',
+			'BG' => 'BG',
+			'HR' => 'HR',
+			'HRV' => 'HR',
+			'SR' => 'SR',
+			'SRB' => 'SR',
+			'SL' => 'SL',
+			'SLO' => 'SL',
+			'SV' => 'SV',
+			'SWE' => 'SV',
+			'NO' => 'NO',
+			'NOR' => 'NO',
+			'FI' => 'FI',
+			'FIN' => 'FI',
+			'DA' => 'DA',
+			'DAN' => 'DA',
+			'NL' => 'NL',
+			'NLD' => 'NL',
+			'PT' => 'PT',
+			'POR' => 'PT',
+			'AR' => 'AR',
+			'ARA' => 'AR',
+			'JA' => 'JA',
+			'JP' => 'JA',
+			'JPN' => 'JA',
+			'KO' => 'KO',
+			'KOR' => 'KO',
+			'ZH' => 'ZH',
+			'ZHO' => 'ZH',
+			'CH' => 'ZH',
+			'UK' => 'UK',
+			'UKR' => 'UK',
+			'TR' => 'TR',
+			'TUR' => 'TR',
+			'EL' => 'EL',
+			'GRE' => 'EL',
+		];
+	}
+
+	$upper = strtoupper($token);
+	return $map[$upper] ?? null;
+}
+
+function detectVariantResolutionRank(array $variant): int
+{
+	foreach (['quality', 'title', 'description'] as $key) {
+		$rank = resolutionRankFromValue($variant[$key] ?? null);
+		if ($rank > 0) {
+			return $rank;
+		}
+	}
+
+	$source = $variant['source'] ?? null;
+	if (is_array($source) && isset($source['stream']) && is_array($source['stream'])) {
+		$stream = $source['stream'];
+		foreach (['quality', 'title', 'description'] as $key) {
+			$rank = resolutionRankFromValue($stream[$key] ?? null);
+			if ($rank > 0) {
+				return $rank;
+			}
+		}
+	}
+
+	return 0;
+}
+
+function resolutionRankFromValue(mixed $value): int
+{
+	if (!is_string($value) || $value === '') {
+		return 0;
+	}
+
+	$lower = strtolower($value);
+	$checks = [
+		6 => ['4320', '8k'],
+		5 => ['2160', '4k', 'uhd'],
+		4 => ['1440', 'qhd'],
+		3 => ['1080', 'fhd'],
+		2 => ['720', ' hd '],
+		1 => ['576', '540', '480'],
+	];
+
+	foreach ($checks as $rank => $needles) {
+		foreach ($needles as $needle) {
+			if ($needle === ' hd ') {
+				if (preg_match('/\bhd\b/', $lower) && !preg_match('/\buhd\b/', $lower)) {
+					return $rank;
+				}
+				continue;
+			}
+			if (str_contains($lower, $needle)) {
+				return $rank;
+			}
+		}
+	}
+
+	return 0;
 }
 
 function fetchUserById(int $userId): ?array

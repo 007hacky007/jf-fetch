@@ -81,6 +81,9 @@ function buildSettingsResponse(): array
 			'min_free_space_gb' => (float) Config::get('app.min_free_space_gb'),
 			'default_search_limit' => (int) Config::get('app.default_search_limit'),
 		],
+		'aria2' => [
+			'max_speed_mb_s' => normalizeAria2MaxSpeed(),
+		],
 		'paths' => [
 			'downloads' => (string) Config::get('paths.downloads'),
 			'library' => (string) Config::get('paths.library'),
@@ -99,6 +102,36 @@ function buildSettingsResponse(): array
 	];
 }
 
+function normalizeAria2MaxSpeed(): float
+{
+	if (!Config::has('aria2.max_speed_mb_s')) {
+		return 0.0;
+	}
+
+	$value = Config::get('aria2.max_speed_mb_s');
+	if ($value === null) {
+		return 0.0;
+	}
+
+	if (is_string($value)) {
+		$value = trim($value);
+		if ($value === '') {
+			return 0.0;
+		}
+	}
+
+	if (!is_numeric($value)) {
+		return 0.0;
+	}
+
+	$float = (float) $value;
+	if ($float < 0) {
+		return 0.0;
+	}
+
+	return round($float, 2);
+}
+
 /**
  * Validates and normalises the incoming settings payload.
  *
@@ -111,6 +144,7 @@ function validateSettingsPayload(array $payload): array
 		'app.max_active_downloads' => ['section' => 'app', 'field' => 'max_active_downloads', 'type' => 'int', 'min' => 0],
 		'app.min_free_space_gb' => ['section' => 'app', 'field' => 'min_free_space_gb', 'type' => 'float', 'min' => 0],
 		'app.default_search_limit' => ['section' => 'app', 'field' => 'default_search_limit', 'type' => 'int', 'min' => 1, 'max' => 100],
+		'aria2.max_speed_mb_s' => ['section' => 'aria2', 'field' => 'max_speed_mb_s', 'type' => 'float', 'min' => 0],
 		'providers.kraska_menu_cache_ttl_seconds' => ['section' => 'providers', 'field' => 'kraska_menu_cache_ttl_seconds', 'type' => 'int', 'min' => 0, 'max' => 31536000],
 		'providers.kraska_debug_enabled' => ['section' => 'providers', 'field' => 'kraska_debug_enabled', 'type' => 'bool', 'required' => false],
 		'providers.kraska_error_backoff_seconds' => ['section' => 'providers', 'field' => 'kraska_error_backoff_seconds', 'type' => 'int', 'min' => 60, 'max' => 86400],
@@ -183,6 +217,16 @@ function validateSettingsPayload(array $payload): array
 				}
 
 				$normalized[$key] = (int) $value;
+				break;
+
+			case 'aria2.max_speed_mb_s':
+				$value = filter_var($rawValue, FILTER_VALIDATE_FLOAT);
+				if ($value === false || $value < (float) ($definition['min'] ?? 0)) {
+					$errors[$key] = 'Aria2 max speed must be a non-negative number.';
+					break;
+				}
+
+				$normalized[$key] = round((float) $value, 2);
 				break;
 
 			case 'providers.kraska_menu_cache_ttl_seconds':

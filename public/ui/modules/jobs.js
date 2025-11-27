@@ -685,6 +685,9 @@ function handleJobEvent(event) {
 	const jobId = Number(job?.id);
 	const isVisible = Number.isFinite(jobId) && state.jobStreamVisibleIds.has(jobId);
 	if (!isVisible) {
+		if (shouldReloadForNewJob(event, job)) {
+			scheduleJobsReload();
+		}
 		return;
 	}
 	// Capture previous job status (if any) before merge for change detection
@@ -745,6 +748,49 @@ function handleJobEvent(event) {
 	if (requiresRefresh) {
 		loadJobs();
 	}
+}
+
+function shouldReloadForNewJob(event, job) {
+	if (!job || !state.user) {
+		return false;
+	}
+
+	if (!job.id || !Number.isFinite(Number(job.id))) {
+		return false;
+	}
+
+	if ((event.type ?? '') !== 'job.updated') {
+		return false;
+	}
+
+	const status = typeof job.status === 'string' ? job.status.toLowerCase() : '';
+	const relevantStatuses = new Set(['queued', 'starting', 'downloading']);
+	if (!relevantStatuses.has(status)) {
+		return false;
+	}
+
+	if (state.showMyJobs) {
+		const jobUserId = Number(job.user_id ?? job.user?.id ?? job.userId ?? 0);
+		const viewerId = Number(state.user.id ?? 0);
+		if (!Number.isFinite(jobUserId) || jobUserId !== viewerId) {
+			return false;
+		}
+	}
+
+	return true;
+}
+
+function scheduleJobsReload() {
+	if (state.jobStreamReloadTimeout) {
+		return;
+	}
+
+	state.jobStreamReloadTimeout = setTimeout(() => {
+		state.jobStreamReloadTimeout = null;
+		if (state.currentView === 'queue') {
+			loadJobs();
+		}
+	}, 400);
 }
 
 export function normalizeJob(job) {

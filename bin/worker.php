@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use App\Download\Aria2Client;
+use App\Download\Aria2Options;
 use App\Infra\Audit;
 use App\Infra\Config;
 use App\Infra\Db;
@@ -393,6 +394,8 @@ function attemptRestartLostTransfer(array $job, Aria2Client $aria2): bool
 			$options['out'] = $derived;
 		}
 	}
+
+	$options = Aria2Options::applySpeedLimit($options);
 
 	try {
 		$gid = $aria2->addUri([$sourceUrl], $options);

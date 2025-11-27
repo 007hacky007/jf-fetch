@@ -34,6 +34,10 @@ final class Auth
             throw new RuntimeException('Configuration key app.session_name must be a non-empty string.');
         }
 
+        $sessionPath = self::resolveSessionPath();
+        self::ensureSessionDirectory($sessionPath);
+        session_save_path($sessionPath);
+
         session_name($sessionName);
         session_set_cookie_params([
             'lifetime' => 0,
@@ -212,5 +216,29 @@ final class Auth
         $result = $statement->fetch();
 
         return $result !== false ? $result : null;
+    }
+
+    private static function resolveSessionPath(): string
+    {
+        $path = null;
+        if (Config::has('app.session_path')) {
+            $candidate = Config::get('app.session_path');
+            if (is_string($candidate) && $candidate !== '') {
+                $path = $candidate;
+            }
+        }
+
+        return $path ?? (sys_get_temp_dir() . '/jf-fetch-sessions');
+    }
+
+    private static function ensureSessionDirectory(string $path): void
+    {
+        if (is_dir($path)) {
+            return;
+        }
+
+        if (!@mkdir($path, 0775, true) && !is_dir($path)) {
+            throw new RuntimeException('Unable to create session directory: ' . $path);
+        }
     }
 }

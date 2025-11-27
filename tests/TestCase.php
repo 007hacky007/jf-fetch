@@ -63,6 +63,7 @@ abstract class TestCase extends BaseTestCase
     {
         $downloads = $overrides['paths']['downloads'] ?? ($this->configDir . '/downloads');
         $library = $overrides['paths']['library'] ?? ($this->configDir . '/library');
+        $sessionPath = $overrides['app']['session_path'] ?? ($this->configDir . '/sessions');
 
         if (!is_dir($downloads)) {
             mkdir($downloads, 0775, true);
@@ -72,9 +73,14 @@ abstract class TestCase extends BaseTestCase
             mkdir($library, 0775, true);
         }
 
+        if (!is_dir($sessionPath)) {
+            mkdir($sessionPath, 0775, true);
+        }
+
         $defaults = [
             'app' => [
                 'session_name' => 'JF_FETCH_TEST',
+                'session_path' => $sessionPath,
                 'max_active_downloads' => 2,
                 'min_free_space_gb' => 0,
             ],
@@ -90,6 +96,7 @@ abstract class TestCase extends BaseTestCase
             'aria2' => [
                 'rpc_url' => 'http://localhost:6800/jsonrpc',
                 'secret' => '',
+                'max_speed_mb_s' => 0,
             ],
             'jellyfin' => [
                 'url' => '',

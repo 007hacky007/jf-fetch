@@ -639,6 +639,15 @@ async function saveSettings() {
 	const kraskaTtlDays = Number.isNaN(parsedKraskaTtl) ? null : Math.max(parsedKraskaTtl, 0);
 	const kraskaTtlSeconds = kraskaTtlDays === null ? null : Math.round(kraskaTtlDays * 86400);
 
+	const aria2MaxSpeedRaw = (els.settingsAria2MaxSpeed?.value ?? '').trim();
+	let aria2MaxSpeed = null;
+	if (aria2MaxSpeedRaw !== '') {
+		const parsedAria2MaxSpeed = Number.parseFloat(aria2MaxSpeedRaw);
+		if (!Number.isNaN(parsedAria2MaxSpeed)) {
+			aria2MaxSpeed = parsedAria2MaxSpeed;
+		}
+	}
+
 	const kraskaBackoffRaw = (els.settingsKraskaBackoffMinutes?.value ?? '').trim();
 	let kraskaBackoffSeconds = null;
 	if (kraskaBackoffRaw !== '') {
@@ -665,6 +674,9 @@ async function saveSettings() {
 			max_active_downloads: maxDownloads,
 			min_free_space_gb: minFreeSpace,
 			default_search_limit: Number.parseInt(els.settingsDefaultSearchLimit?.value ?? '', 10) || null,
+		},
+		aria2: {
+			max_speed_mb_s: aria2MaxSpeed,
 		},
 		paths: {
 			downloads: (els.settingsDownloadsPath?.value ?? '').trim(),
@@ -736,6 +748,7 @@ function renderSettings() {
 		els.settingsMaxDownloads,
 		els.settingsMinFreeSpace,
 		els.settingsDefaultSearchLimit,
+		els.settingsAria2MaxSpeed,
 		els.settingsKraskaMenuCacheTtl,
 		els.settingsKraskaBackoffMinutes,
 		els.settingsKrask2SpacingSeconds,
@@ -772,6 +785,14 @@ function renderSettings() {
 		if (els.settingsDefaultSearchLimit) {
 			const dsl = settings?.app?.default_search_limit;
 			els.settingsDefaultSearchLimit.value = dsl === null || dsl === undefined ? '' : String(dsl);
+		}
+		if (els.settingsAria2MaxSpeed) {
+			const maxSpeed = settings?.aria2?.max_speed_mb_s;
+			if (maxSpeed === null || maxSpeed === undefined) {
+				els.settingsAria2MaxSpeed.value = '';
+			} else {
+				els.settingsAria2MaxSpeed.value = String(maxSpeed);
+			}
 		}
 		if (els.settingsKraskaMenuCacheTtl) {
 			const ttlSeconds = settings?.providers?.kraska_menu_cache_ttl_seconds;
@@ -891,6 +912,7 @@ function resetState() {
 	stopJobStream();
 	state.user = null;
 	state.providers = [];
+	state.providersLoaded = false;
 	state.users = [];
 	state.searchResults = [];
 	state.selectedSearch.clear();
@@ -912,6 +934,10 @@ function resetState() {
 	state.jobStreamConnectedAt = null;
 	state.jobStreamVisibleIds = new Set();
 	state.jobStreamVisibleKey = '';
+	if (state.jobStreamReloadTimeout) {
+		clearTimeout(state.jobStreamReloadTimeout);
+	}
+	state.jobStreamReloadTimeout = null;
 	state.defaultSearchLimit = 50;
 	state.kraska.currentPath = '/';
 	state.kraska.title = null;
@@ -2754,7 +2780,14 @@ async function queueKraskaVariant(index, button) {
 }
 
 function setKraskaMode(mode) {
-	const normalized = mode === 'krask2' ? 'krask2' : 'kraska';
+	const available = getAvailableBrowseProviders();
+	let normalized = mode === 'krask2' ? 'krask2' : 'kraska';
+	if (available.length > 0 && !available.includes(normalized)) {
+		normalized = available[0];
+	} else if (available.length === 0) {
+		normalized = 'kraska';
+	}
+
 	if (state.kraska.mode === normalized) {
 		if (normalized === 'krask2') {
 			ensureKrask2Initialized();
@@ -2775,16 +2808,47 @@ function setKraskaMode(mode) {
 	}
 }
 
+function getAvailableBrowseProviders() {
+	const providerKeys = ['kraska', 'krask2'];
+	if (!state.providersLoaded) {
+		return providerKeys;
+	}
+
+	if (!Array.isArray(state.providers) || state.providers.length === 0) {
+		return [];
+	}
+
+	const configuredKeys = new Set(state.providers.map((provider) => provider.key));
+	return providerKeys.filter((key) => configuredKeys.has(key));
+}
+
 function updateKraskaProviderToggle() {
-	const mode = state.kraska.mode === 'krask2' ? 'krask2' : 'kraska';
+	const available = getAvailableBrowseProviders();
+	let mode = state.kraska.mode === 'krask2' ? 'krask2' : 'kraska';
+	if (available.length > 0 && !available.includes(mode)) {
+		mode = available[0];
+		state.kraska.mode = mode;
+	} else if (available.length === 0) {
+		mode = 'kraska';
+		state.kraska.mode = mode;
+	}
+
 	if (els.kraskaProviderToggle) {
 		const buttons = els.kraskaProviderToggle.querySelectorAll('[data-kraska-provider]');
+		let visibleCount = 0;
 		buttons.forEach((button) => {
-			const isActive = button.dataset.kraskaProvider === mode;
+			const providerKey = button.dataset.kraskaProvider === 'krask2' ? 'krask2' : 'kraska';
+			const isAvailable = !state.providersLoaded || available.includes(providerKey);
+			button.classList.toggle('hidden', !isAvailable);
+			if (isAvailable) {
+				visibleCount += 1;
+			}
+			const isActive = providerKey === mode;
 			button.classList.toggle('text-slate-100', isActive);
 			button.classList.toggle('text-slate-300/70', !isActive);
 			button.classList.toggle('bg-slate-900/40', isActive);
 		});
+		toggleElement(els.kraskaProviderToggle, visibleCount > 0, 'inline-flex');
 	}
 	toggleElement(els.kraskaMenuControls, mode === 'kraska');
 	toggleElement(els.kraskaMenuView, mode === 'kraska');
@@ -4025,12 +4089,16 @@ async function loadProviders() {
 			...provider,
 			name: provider.name ?? provider.key,
 		}));
+		state.providersLoaded = true;
 		renderProviders();
 		renderProviderFilters();
 	} catch (error) {
 		state.providers = defaultProviders();
+		state.providersLoaded = true;
 		renderProvidersError(error);
 		renderProviderFilters();
+	} finally {
+		updateKraskaProviderToggle();
 	}
 }
 
