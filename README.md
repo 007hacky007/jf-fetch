@@ -120,15 +120,14 @@ Key endpoints exposed under `public/api/` (not exhaustive):
     "failed_jobs": 2,
     "deleted_jobs": 9,
     "distinct_users": 4,
-    "total_bytes_downloaded": 9876543210,
-    "total_download_duration_seconds": 123456,
-    "avg_download_duration_seconds": 6172,
-    "success_rate_pct": 48
+    "total_bytes_downloaded_last_24h": 9876543210,
+    "completed_jobs_last_24h": 12,
+    "success_rate_last_24h_pct": 48
   }
 }
 ```
 
-`total_bytes_downloaded` and durations are derived by scanning completed job files unless persisted; consider caching for very large libraries.
+`total_bytes_downloaded_last_24h` sums the `file_size_bytes` of jobs completed during the trailing 24-hour window; consider caching or denormalizing this value for very large libraries.
 
 ## Configuration
 

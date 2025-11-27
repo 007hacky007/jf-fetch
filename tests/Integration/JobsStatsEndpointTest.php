@@ -109,9 +109,12 @@ final class JobsStatsEndpointTest extends TestCase
         $this->assertSame(1, $data['distinct_users']);
 
         $expectedBytes = 1500 + 4096;
-        $this->assertSame($expectedBytes, $data['total_bytes_downloaded']);
-        $this->assertSame(0, $data['total_download_duration_seconds']); // same created/updated timestamps
-        $this->assertSame(0, $data['avg_download_duration_seconds']);
+        $this->assertSame($expectedBytes, $data['total_bytes_downloaded_last_24h']);
+        $this->assertSame(2, $data['completed_jobs_last_24h']);
+        $this->assertSame(66, $data['success_rate_last_24h_pct']);
+        $this->assertArrayNotHasKey('total_bytes_downloaded', $data);
+        $this->assertArrayNotHasKey('total_download_duration_seconds', $data);
+        $this->assertArrayNotHasKey('avg_download_duration_seconds', $data);
     }
 
     private function migrate(PDO $pdo): void

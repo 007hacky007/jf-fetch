@@ -1031,6 +1031,7 @@ function renderStats() {
 	const push = (label, value) => rows.push(`<div class="flex items-center justify-between text-xs"><span class="text-slate-400">${escapeHtml(label)}</span><span class="font-medium text-slate-200">${escapeHtml(String(value))}</span></div>`);
 	push('Total jobs', stats.total_jobs);
 	push('Completed', stats.completed_jobs);
+	push('Jobs completed in last 24h', stats.completed_jobs_last_24h ?? 0);
 	push('Active', stats.active_jobs);
 	push('Queued', stats.queued_jobs);
 	push('Paused', stats.paused_jobs);
@@ -1038,10 +1039,8 @@ function renderStats() {
 	push('Failed', stats.failed_jobs);
 	push('Deleted', stats.deleted_jobs);
 	push('Distinct users', stats.distinct_users);
-	push('Success rate', stats.success_rate_pct !== null ? stats.success_rate_pct + '%' : '—');
-	push('Total downloaded', humanBytes(stats.total_bytes_downloaded));
-	push('Total download time', formatDuration(stats.total_download_duration_seconds));
-	push('Avg download time', stats.avg_download_duration_seconds !== null ? formatDuration(stats.avg_download_duration_seconds) : '—');
+	push('Success rate in last 24h', stats.success_rate_last_24h_pct !== null ? stats.success_rate_last_24h_pct + '%' : '—');
+	push('Total downloaded in last 24 hours', humanBytes(stats.total_bytes_downloaded_last_24h ?? 0));
 	container.innerHTML = `<div class="grid gap-1">${rows.join('')}</div>`;
 }
 

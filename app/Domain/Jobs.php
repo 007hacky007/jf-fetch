@@ -6,6 +6,9 @@ namespace App\Domain;
 
 use App\Infra\Db;
 use App\Support\Clock;
+use DateInterval;
+use DateTimeImmutable;
+use DateTimeZone;
 use PDO;
 use RuntimeException;
 use Throwable;
@@ -406,6 +409,13 @@ final class Jobs
         }
         $where = $conditions ? ('WHERE ' . implode(' AND ', $conditions)) : '';
 
+        $fetchInt = static function (string $sql, array $params = []): int {
+            $stmt = Db::run($sql, $params);
+            $value = $stmt->fetchColumn();
+
+            return $value !== false ? (int) $value : 0;
+        };
+
         $baseCountsSql = [
             'total_jobs' => "SELECT COUNT(*) FROM jobs $where",
             'completed_jobs' => "SELECT COUNT(*) FROM jobs $where" . ($where ? ' AND' : ' WHERE') . " status = 'completed'",
@@ -419,49 +429,37 @@ final class Jobs
 
         $stats = [];
         foreach ($baseCountsSql as $key => $sql) {
-            $stmt = Db::run($sql, $params);
-            $value = $stmt->fetchColumn();
-            $stats[$key] = $value !== false ? (int) $value : 0;
+            $stats[$key] = $fetchInt($sql, $params);
         }
 
         // Distinct users involved in these jobs (respect RBAC)
         $distinctSql = "SELECT COUNT(DISTINCT user_id) FROM jobs $where";
-        $distinctStmt = Db::run($distinctSql, $params);
-        $distinctUsers = $distinctStmt->fetchColumn();
-        $stats['distinct_users'] = $distinctUsers !== false ? (int) $distinctUsers : 0;
+        $stats['distinct_users'] = $fetchInt($distinctSql, $params);
 
-        // Aggregate bytes using SQL SUM for completed jobs
-        $bytesSql = "SELECT COALESCE(SUM(file_size_bytes), 0) FROM jobs $where" . ($where ? ' AND' : ' WHERE') . " status = 'completed'";
-        $bytesStmt = Db::run($bytesSql, $params);
-        $totalBytes = $bytesStmt->fetchColumn();
-        $stats['total_bytes_downloaded'] = $totalBytes !== false ? (int) $totalBytes : 0;
+        $windowStart = (new DateTimeImmutable('now', new DateTimeZone('UTC')))
+            ->sub(new DateInterval('PT24H'))
+            ->format('Y-m-d\TH:i:s.uP');
+        $timeParams = $params;
+        $timeParams['window_start'] = $windowStart;
+        $timeConditions = $conditions;
+        $timeConditions[] = 'updated_at >= :window_start';
+        $timeWhere = 'WHERE ' . implode(' AND ', $timeConditions);
 
-        // Aggregate duration for completed jobs
-        $durationSql = "SELECT created_at, updated_at FROM jobs $where" . ($where ? ' AND' : ' WHERE') . " status = 'completed'";
-        $durationStmt = Db::run($durationSql, $params);
-        $durationRows = $durationStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
-        $totalDurationSeconds = 0;
-        foreach ($durationRows as $row) {
-            try {
-                $createdTs = strtotime((string) $row['created_at']);
-                $updatedTs = strtotime((string) $row['updated_at']);
-                if ($createdTs !== false && $updatedTs !== false && $updatedTs >= $createdTs) {
-                    $totalDurationSeconds += ($updatedTs - $createdTs);
-                }
-            } catch (\Throwable) {
-                // ignore parse errors
-            }
-        }
-        $stats['total_download_duration_seconds'] = $totalDurationSeconds;
+        $stats['completed_jobs_last_24h'] = $fetchInt(
+            "SELECT COUNT(*) FROM jobs $timeWhere AND status = 'completed'",
+            $timeParams
+        );
+        $failedLast24h = $fetchInt(
+            "SELECT COUNT(*) FROM jobs $timeWhere AND status = 'failed'",
+            $timeParams
+        );
 
-        // Average download duration (seconds) for completed jobs
-        $stats['avg_download_duration_seconds'] = $stats['completed_jobs'] > 0
-            ? (int) floor($totalDurationSeconds / $stats['completed_jobs'])
-            : null;
+        $bytesWindowSql = "SELECT COALESCE(SUM(file_size_bytes), 0) FROM jobs $timeWhere AND status = 'completed'";
+        $stats['total_bytes_downloaded_last_24h'] = $fetchInt($bytesWindowSql, $timeParams);
 
-        // Percentage success rate
-        $stats['success_rate_pct'] = $stats['total_jobs'] > 0
-            ? (int) floor(($stats['completed_jobs'] / $stats['total_jobs']) * 100)
+        $considered = $stats['completed_jobs_last_24h'] + $failedLast24h;
+        $stats['success_rate_last_24h_pct'] = $considered > 0
+            ? (int) floor(($stats['completed_jobs_last_24h'] / $considered) * 100)
             : null;
 
         return $stats;
